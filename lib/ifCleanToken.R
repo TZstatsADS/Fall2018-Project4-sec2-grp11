@@ -22,12 +22,10 @@ ifCleanToken <- function(cur_token){
   
   #feature 3
   s <- str_count(cur_token, pattern = '[^[:alnum:]]')
-  s/l
   feature_list[[3]] <- c(s, s/l)
   
   #feature 4
   d <- str_count(cur_token, pattern = '[0-9]')
-  d/l
   feature_list[[4]] <- c(d, d/l)
   
   #feature 5
@@ -90,24 +88,18 @@ ifCleanToken <- function(cur_token){
   #feature 10
 
   #feature 11
-  count <- 0
-  prev_symbol <- NULL
-  max_seq <- 0
-  for(i in 1:l){
-    cur_symbol <- string_split[i]
-    if(is.null(prev_symbol) | cur_symbol == prev_symbol){
-      count <- count + 1
-      if (count >= 3 & count > max_seq){
-        max_seq <- count
-      }
+  symbol_list <- list()
+  for(j in 1:l){
+    cur_symbol <- string_split[j]
+    if (cur_symbol %in% names(list)){
+      symbol_list[[cur_symbol]] <- symbol_list[[cur_symbol]]+1
     }
     else{
-      count <- 0
+      symbol_list[[cur_symbol]] <- 1
     }
-    
-    prev_symbol <- cur_symbol
   }
-  feature_list[[6]] <- (max_seq/l)
+  i <- max(unlist(symbol_list))
+  feature_list[[11]] <- ifelse(i>=3, i/l, 0)
 
   #feature 12
   l1 <- str_count(cur_token, pattern = '[:alpha:]')
