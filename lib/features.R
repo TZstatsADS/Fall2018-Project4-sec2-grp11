@@ -11,7 +11,7 @@ extract_feature <- function(cur_token){
   consonants <- '[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]'
   v <- str_count(cur_token, pattern = vowels)
   c <- str_count(cur_token, pattern = consonants)
-  feature_list[[2]] <- c(v,c,v/l,c/l, ifelse(c > 0, v/c, Inf))
+  feature_list[[2]] <- c(v,c,v/l,c/l,v/c)
   
   #feature 3
   s <- str_count(cur_token, pattern = '[^[:alnum:]]')
