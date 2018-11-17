@@ -58,6 +58,7 @@ In this project, we are going to **focus on the third stage -- post-processing**
 
 # Step 1 - Load library and source code
 ```{r, warning=FALSE, message = FALSE}
+# setwd("F:/huihui/ADS/proj4/Fall2018-Project4-sec2--sec2proj4_grp11-master/doc")
 if (!require("devtools")) install.packages("devtools")
 if (!require("pacman")) {
   ## devtools is required
@@ -67,8 +68,8 @@ if (!require("pacman")) {
 
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
 source('../lib/features.R')
-source('../lib/train_svm.R')
-source('../lib/ifCleanToken.R')
+# source('../lib/train_svm.R')
+# source('../lib/ifCleanToken.R')
 file_name_vec <- list.files("../data/ground_truth") #100 files in total
 ```
 
@@ -140,11 +141,16 @@ for (i in 1:80){
 nonerror_train <- unique(unlist(nonerror_train_list))
 error_train <- unique(unlist(error_train_list))
 train_tokens <- c(nonerror_train,error_train)
-train_labels <- c(rep(1, length(nonerror_train)),rep(0, length(error_train)))
+train_labels <- as.factor(c(rep(1, length(nonerror_train)),rep(0, length(error_train))))
 # source('../lib/features.R')
 train_input <-matrix(unlist(lapply(train_tokens,extract_feature)), byrow = TRUE, nrow = length(train_tokens))
+train_input_na <- train_input
+train_input_na[is.infinite(train_input_na)]<-NA
+train_input_na[is.nan(train_input_na)]<-NA
 # source('../lib/train_svm.R')
-# fit_svm <- ksvm(x = train_input, y = train_labels, type = "nu-svc")
+# library(e1071)
+library(kernlab)
+system.time(fit_svm <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc"))
 ```
 
 test data
