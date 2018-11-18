@@ -65,6 +65,8 @@ if (!require("pacman")) {
   library(devtools)
   install_github("trinker/pacman")
 }
+library(vwr)
+library(liquidSVM)
 
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
 source('../lib/features.R')
@@ -117,21 +119,25 @@ train data
 ```{r}
 #100 files 5 groups - grp1(1:10),grp2(11:38),grp3(39:41),grp4(42:68),grp5(69:100) (10, 28, 3, 27, 32)files respectively
 #select 8,22,2,22,26 files from each group as the training set
-train_file_id <-c(1:8, 11:32, 39:40, 42:63, 69:94)
-error_train_list <- rep(list(NULL),80)
-nonerror_train_list <- rep(list(NULL), 80)
+# train_file_id <-c(3:10, 17:38, 40:41, 47:68, 75:100)
+# error_train_list <- rep(list(NULL),80)
+# nonerror_train_list <- rep(list(NULL), 80)
+ground_truth_all <- c()
 
-# error_train_list <- rep(list(NULL),10)
-# nonerror_train_list <- rep(list(NULL), 10)
+train_file_id <-c(9:10, 37:38, 41, 67:68,98:100)
+error_train_list <- rep(list(NULL),10)
+nonerror_train_list <- rep(list(NULL), 10)
 
-# for (i in 1:10){
-for (i in 1:80){
+
+for (i in 1:10){
+# for (i in 1:80){
   current_file_name <- sub(".txt","",file_name_vec[train_file_id[i]])
 
   ## read the ground truth text
   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
   clean_ground_truth_txt <-paste(current_ground_truth_txt,collapse = " ")
   ground_truth_vec <- str_split(clean_ground_truth_txt," ")[[1]]
+  ground_truth_all <- c(ground_truth_all, ground_truth_vec)
   ground_truth_set <- unique(ground_truth_vec)
 
   ## read the tesseract text
@@ -142,31 +148,44 @@ for (i in 1:80){
   error_train_list[[i]] <-tesseract_vec[!tesseract_vec %in% ground_truth_set]
 }
 
+bigrams_all <- unlist(lapply(ground_truth_all, bigram_from_token))
+
+
 nonerror_train <- unique(unlist(nonerror_train_list))
 error_train <- unique(unlist(error_train_list))
 train_tokens <- c(nonerror_train,error_train)
 train_labels <- as.factor(c(rep(1, length(nonerror_train)),rep(0, length(error_train))))
 # source('../lib/features.R')
-train_input <-matrix(unlist(lapply(train_tokens,extract_feature)), byrow = TRUE, nrow = length(train_tokens))
+system.time(train_input <-matrix(unlist(lapply(train_tokens,extract_feature, bigrams_all)), byrow = TRUE, nrow = length(train_tokens)))
 train_input_na <- train_input
 train_input_na[is.infinite(train_input_na)]<-NA
 train_input_na[is.nan(train_input_na)]<-NA
 # source('../lib/train_svm.R')
 # library(e1071)
-library(kernlab)
-fit_svm <- rep(list(NULL),3)
-system.time(fit_svm[[1]] <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.5, cross=3))
-system.time(fit_svm[[2]] <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.6, cross=3))
-system.time(fit_svm[[3]] <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.7, cross=3))
+# library(kernlab)
+# system.time(fit_svm <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", cross=3))
+# fit_svm <- rep(list(NULL),3)
+# system.time(fit_svm[[1]] <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", nu = 0.5, cross=3))
+# system.time(fit_svm[[2]] <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", nu = 0.6, cross=3))
+# system.time(fit_svm[[3]] <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", nu = 0.7, cross=3))
+# library(SwarmSVM)
+# system.time(model <- alphasvm(x = train_input_na, y = train_labels, scale = TRUE, cross = 3))
+# library(liquidSVM)
+system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels))
 ```
 
 test data
 ```{r}
-test_file_id <-c(9:10, 33:38, 41, 64:68, 95:100)
-# error_test_list <- rep(list(NULL), 20)
-# nonerror_test_list <- rep(list(NULL), 20)
+# test_file_id <-c(1:2, 11:16, 39, 42:46, 69:74)
+# tesseract_vec_list <- rep(list(NULL), 20)
+# test_labels_list <- rep(list(NULL), 20)
 
-for (i in 1:20){
+test_file_id <-c(1, 11, 39, 42, 69)
+tesseract_vec_list <- rep(list(NULL), 5)
+test_labels_list <- rep(list(NULL), 5)
+
+for (i in 1:5){
+# for (i in 1:20){
   current_file_name <- sub(".txt","",file_name_vec[test_file_id[i]])
 
   ## read the ground truth text
@@ -178,11 +197,22 @@ for (i in 1:20){
   ## read the tesseract text
   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
   clean_tesseract_txt <- paste(current_tesseract_txt, collapse = " ")
-  tesseract_vec <- str_split(clean_tesseract_txt," ")[[1]] 
+  tesseract_vec_list[[i]] <- str_split(clean_tesseract_txt," ")[[1]] 
+  test_labels_list[[i]] <- as.factor(ifelse(tesseract_vec_list[[i]] %in% ground_truth_set, 1, 0))
   # tesseract_if_clean <- unlist(lapply(tesseract_vec,ifCleanToken))
   # nonerror_test_list[[i]] <- tesseract_vec[tesseract_vec %in% ground_truth_set]
   # error_test_list[[i]] <-tesseract_vec[!tesseract_vec %in% ground_truth_set]
 }
+test_tokens <- unlist(tesseract_vec_list)
+test_labels <- unlist(test_labels_list)
+system.time(test_input <- matrix(unlist(lapply(test_tokens,extract_feature,bigrams_all)), byrow = TRUE, nrow = length(test_tokens)))
+test_input_na <- test_input
+test_input_na[is.infinite(test_input_na)]<-NA
+test_input_na[is.nan(test_input_na)]<-NA
+system.time(preds <- predict(fit_svm, test_input_na))
+# system.time(preds <- predict(model, test_input_na))
+table(preds, test_labels)
+
 ```
 
 ```{r}
