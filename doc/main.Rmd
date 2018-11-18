@@ -154,9 +154,10 @@ train_input_na[is.nan(train_input_na)]<-NA
 # source('../lib/train_svm.R')
 # library(e1071)
 library(kernlab)
-system.time(fit_svm <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.05, cross=3))
-system.time(fit_svm <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.5, cross=3))
-system.time(fit_svm <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.9, cross=3))
+fit_svm <- rep(list(NULL),3)
+system.time(fit_svm[[1]] <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.5, cross=3))
+system.time(fit_svm[[2]] <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.6, cross=3))
+system.time(fit_svm[[3]] <- ksvm(x = train_input_na, y = train_labels, type = "nu-svc", nu = 0.7, cross=3))
 ```
 
 test data
