@@ -1,4 +1,22 @@
-extract_feature <- function(cur_token){
+bigram_from_token <- function(input_string){
+  nb <- nchar(input_string)-1
+  if(nb>0){
+    bigram <- rep(NA, nb)
+    for(i in 1:nb){
+      bigram[i]<-substr(input_string,start=i,stop=i+1)
+    }
+  }
+  else{
+    bigram = input_string
+  }
+  return(bigram)
+}
+
+bigram_freq<-function(bigram, all_bigrams){
+  return(sum(all_bigrams == bigram))
+}
+
+extract_feature <- function(cur_token, all_correct_bigrams){
   
   feature_list <- rep(list(NULL),13)
   
@@ -11,7 +29,7 @@ extract_feature <- function(cur_token){
   consonants <- '[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]'
   v <- str_count(cur_token, pattern = vowels)
   c <- str_count(cur_token, pattern = consonants)
-  feature_list[[2]] <- c(v,c,v/l,c/l,v/c)
+  feature_list[[2]] <- c(v,c,v/l,c/l,ifelse(c>0,v/c,10000))
   
   #feature 3
   s <- str_count(cur_token, pattern = '[^[:alnum:]]')
@@ -85,6 +103,18 @@ extract_feature <- function(cur_token){
   feature_list[[9]] <- f9
   
   #feature 10 bigram
+  # N<-length(all_correct_tokens)
+  cur_bigrams <- bigram_from_token(cur_token)
+  
+  bf <- unlist(lapply(cur_bigrams, bigram_freq, all_correct_bigrams))
+  n <- length(cur_bigrams)
+  bigr <- sum(bf)/n/10000
+  # bf <- rep(0,n)
+  # for(i in 1:n){
+  #     bf[i]<- sum(all_correct_bigrams == cur_bigrams[i])
+  # }
+  
+  feature_list[[10]] <- bigr
   
   #feature 11
   symbol_list <- list()
@@ -103,9 +133,11 @@ extract_feature <- function(cur_token){
   #feature 12
   l1 <- str_count(cur_token, pattern = '[:alpha:]')
   l2 <- l - l1
-  feature_list[[12]] <- l2/l1
+  feature_list[[12]] <- ifelse(l1>0, l2/l1, 10000)
   
   #feature 13 leveshtein distance
+  nv <- min(levenshtein.distance(cur_token, ground_truth_set))
+  feature_list[[13]] <-(nv+1)/l
   
   ft = unlist(feature_list)
   return(ft)
