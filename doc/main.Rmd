@@ -171,8 +171,65 @@ train_input_na[is.nan(train_input_na)]<-NA
 # library(SwarmSVM)
 # system.time(model <- alphasvm(x = train_input_na, y = train_labels, scale = TRUE, cross = 3))
 # library(liquidSVM)
-system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels))
+# system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels))
 ```
+
+cross validation
+```{r}
+K<-5
+cv.function <- function(X.train, y.train, par, K){
+  n_tokens <- length(y.train)
+  n.fold <- floor(n_tokens/K)
+  s <- sample(rep(1:K, c(rep(n.fold, K-1), n_tokens-(K-1)*n.fold)))  
+  cv.error <- rep(NA, K)
+  
+  for (k in 1:K){
+    train.data <- X.train[s != i, ]
+    train.label <- y.train[s != i]
+    test.data <- X.train[s == i, ]
+    test.label <- y.train[s == i]
+    
+    fit <- mcSVM(train.data, train.label, C = par$C, sigma = par$sigma, KERNEL = "GAUSS_RBF")
+    pred <- predict(fit, test.data)
+    cv.error[k] <- sum(pred != test.label)/length(pred)  
+    
+  }			
+  return(c(mean(cv.error), sd(cv.error)))
+}
+cv_result<-c()
+Cs <- c(0.01, 0.1, 1)
+sigmas <- c(0.01, 0.1, 1)
+# gammas <- c(0.1, 1, 10)
+# lambdas <- c(0.0001,0.001,0.01)
+for(i in 1:length(Cs)){
+  for( j in 1:length(sigmas)){
+    pars = list("C"=Cs[i],"sigma"=sigmas[j])
+    system.time(cv_result <- rbind(cv_result, 
+                                   cv.function(train_input_na,train_labels,pars,K)))
+  }
+}
+
+best_C_ind <- which.min(cv_result[,1])%/%length(sigmas)+1
+best_sigma_ind <- which.min(cv_result[,1])%%length(sigmas)
+best_C <- Cs[best_C_ind]
+best_sigma <- sigmas[best_sigma_ind]
+
+# best_gamma_ind <- which.max(cv_result[,1])%/%length(lambdas)+1
+# best_lambda_ind <- which.max(cv_result[,1])%%length(lambdas)
+# best_gamma <- gammas[best_gamma_ind]
+# best_lambda <- lambdas[best_lambda_ind]
+
+# system.time(fit_mcsvm <- mcSVM(x = train_input_na, y = train_labels, gamma = 0.1))
+# system.time(fit_mcsvm2 <- mcSVM(x = train_input_na, y = train_labels, lambda = 0.001))
+#KERNEL = GAUSS_RBF
+```
+train
+```{r}
+system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels, 
+                             C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
+# system.time(fit_svm_auto <- mcSVM(x = train_input_na, y = train_labels))
+```
+
 
 test data
 ```{r}
@@ -213,6 +270,13 @@ system.time(preds <- predict(fit_svm, test_input_na))
 # system.time(preds <- predict(model, test_input_na))
 table(preds, test_labels)
 
+# system.time(preds_auto <- predict(fit_svm_auto, test_input_na))
+# table(preds_auto, test_labels)
+# system.time(predsmc <- predict(fit_mcsvm, test_input_na))
+# table(predsmc, test_labels)
+# 
+# system.time(predsmc2 <- predict(fit_mcsvm2, test_input_na))
+# table(predsmc2, test_labels)
 ```
 
 ```{r}
