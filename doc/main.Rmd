@@ -11,8 +11,6 @@ output:
     code_folding: hide
 ---
 
-Jing Wu
-
 GU4243/GR5243: Applied Data Science
 
 <style type="text/css">
@@ -268,7 +266,7 @@ test_input_na[is.infinite(test_input_na)]<-NA
 test_input_na[is.nan(test_input_na)]<-NA
 system.time(preds <- predict(fit_svm, test_input_na))
 # system.time(preds <- predict(model, test_input_na))
-table(preds, test_labels)
+
 
 # system.time(preds_auto <- predict(fit_svm_auto, test_input_na))
 # table(preds_auto, test_labels)
@@ -278,6 +276,63 @@ table(preds, test_labels)
 # system.time(predsmc2 <- predict(fit_mcsvm2, test_input_na))
 # table(predsmc2, test_labels)
 ```
+
+detection evaluation
+
+
+```{r}
+#false negative for errors causes more severe consequence than false positive, as there is a procedure for correction after the detection which can somehow filter out the false postive, while false negative are errors that are totally ignored
+table(preds, test_labels)
+#correctly classified nonerror
+#mostly stopwords
+test_tokens[preds== "1" & test_labels == "1"]
+```
+
+correctly classified errors
+```{r}
+test_tokens[preds== "0" & test_labels == "0"]
+```
+classified nonerror as error
+potential cause 1: training vocabulary limited
+suggestion: enlarge training dictionaries
+potential cause 2: punctuations following a correct string
+suggestion: try modifying features that take into account such cases
+
+```{r}
+test_tokens[preds== "0" & test_labels == "1"]
+```
+
+classified error as nonerror
+remedy:??? regression defect?
+```{r}
+test_tokens[preds== "1" & test_labels == "0"]
+```
+
+examine vocabulary-based features effect on svm (bigram & levenshtein distance)
+suggestion: add more vocabulary-based features and modify the self-based features to fit the classificaiton of error and nonerror instead of garbage and nongarbage
+```{r}
+#in fact need another CV here
+#using features excluding 2
+train_input_self <- train_input_na[,-c(19,22)]
+test_input_self <- test_input_na[,-c(19,22)]
+system.time(fit_svm_self <- mcSVM(x = train_input_self, y = train_labels, 
+                                  C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
+system.time(preds_self <- predict(fit_svm_self, test_input_self))
+table(preds_self, test_labels)
+
+#using only non-vocabulary-based features defined in the paper for garbage detection, we get more false positives for errors. The overall performance is not obviously better than a random classifier. 
+```
+```{r}
+#in fact need another CV here
+train_input_voc <- train_input_na[,c(19,22)]
+test_input_voc <- test_input_na[,c(19,22)]
+system.time(fit_svm_voc <- mcSVM(x = train_input_voc, y = train_labels,
+                                 C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
+system.time(preds_voc <- predict(fit_svm_voc, test_input_voc))
+table(preds_voc, test_labels)
+#using only vocabulary-based features is slightly better than non-vocabulary-based features, but it is still much worse than using all the features. But putting together the false negatives for errors are worse than using only vocabulary-based features, and the true positives for errors are slightly worse. Considering the later procedure for correction, maybe using only vocabulary-based features are better for the overall OCR post-processing performance. But it also depends on the correction methods - if it is able to leave the tokens that don't need to be corrected as they are and the time it takes for correction.
+```
+
 
 ```{r}
 ## detect tesseract word error
