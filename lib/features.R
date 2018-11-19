@@ -7,7 +7,7 @@ bigram_from_token <- function(input_string){
     }
   }
   else{
-    bigram = input_string
+    bigram <- NULL
   }
   return(bigram)
 }
@@ -104,11 +104,17 @@ extract_feature <- function(cur_token, all_correct_bigrams){
   
   #feature 10 bigram
   # N<-length(all_correct_tokens)
-  cur_bigrams <- bigram_from_token(cur_token)
+  if(l==1){
+    bigr <- 10000
+  }
+  else{
+    cur_bigrams <- bigram_from_token(tolower(cur_token))
   
   bf <- unlist(lapply(cur_bigrams, bigram_freq, all_correct_bigrams))
   n <- length(cur_bigrams)
   bigr <- sum(bf)/n/10000
+  }
+  
   # bf <- rep(0,n)
   # for(i in 1:n){
   #     bf[i]<- sum(all_correct_bigrams == cur_bigrams[i])
@@ -136,7 +142,7 @@ extract_feature <- function(cur_token, all_correct_bigrams){
   feature_list[[12]] <- ifelse(l1>0, l2/l1, 10000)
   
   #feature 13 leveshtein distance
-  nv <- min(levenshtein.distance(cur_token, ground_truth_set))
+  nv <- min(levenshtein.distance(tolower(cur_token), english.words))
   feature_list[[13]] <-(nv+1)/l
   
   ft = unlist(feature_list)
