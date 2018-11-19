@@ -120,7 +120,7 @@ train data
 # train_file_id <-c(3:10, 17:38, 40:41, 47:68, 75:100)
 # error_train_list <- rep(list(NULL),80)
 # nonerror_train_list <- rep(list(NULL), 80)
-ground_truth_all <- c()
+# ground_truth_all <- c()
 
 train_file_id <-c(9:10, 37:38, 41, 67:68,98:100)
 error_train_list <- rep(list(NULL),10)
@@ -135,7 +135,7 @@ for (i in 1:10){
   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
   clean_ground_truth_txt <-paste(current_ground_truth_txt,collapse = " ")
   ground_truth_vec <- str_split(clean_ground_truth_txt," ")[[1]]
-  ground_truth_all <- c(ground_truth_all, ground_truth_vec)
+  # ground_truth_all <- c(ground_truth_all, ground_truth_vec)
   ground_truth_set <- unique(ground_truth_vec)
 
   ## read the tesseract text
@@ -146,7 +146,8 @@ for (i in 1:10){
   error_train_list[[i]] <-tesseract_vec[!tesseract_vec %in% ground_truth_set]
 }
 
-bigrams_all <- unlist(lapply(ground_truth_all, bigram_from_token))
+# bigrams_all <- unlist(lapply(ground_truth_all, bigram_from_token))
+eng_bigrams <- unlist(lapply(english.words, bigram_from_token))
 
 
 nonerror_train <- unique(unlist(nonerror_train_list))
@@ -154,7 +155,7 @@ error_train <- unique(unlist(error_train_list))
 train_tokens <- c(nonerror_train,error_train)
 train_labels <- as.factor(c(rep(1, length(nonerror_train)),rep(0, length(error_train))))
 # source('../lib/features.R')
-system.time(train_input <-matrix(unlist(lapply(train_tokens,extract_feature, bigrams_all)), byrow = TRUE, nrow = length(train_tokens)))
+system.time(train_input <-matrix(unlist(lapply(train_tokens,extract_feature, eng_bigrams)), byrow = TRUE, nrow = length(train_tokens)))
 train_input_na <- train_input
 train_input_na[is.infinite(train_input_na)]<-NA
 train_input_na[is.nan(train_input_na)]<-NA
@@ -223,6 +224,8 @@ best_sigma <- sigmas[best_sigma_ind]
 ```
 train
 ```{r}
+best_C <- 1
+best_sigma <- 0.1
 system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels, 
                              C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
 # system.time(fit_svm_auto <- mcSVM(x = train_input_na, y = train_labels))
@@ -260,7 +263,7 @@ for (i in 1:5){
 }
 test_tokens <- unlist(tesseract_vec_list)
 test_labels <- unlist(test_labels_list)
-system.time(test_input <- matrix(unlist(lapply(test_tokens,extract_feature,bigrams_all)), byrow = TRUE, nrow = length(test_tokens)))
+system.time(test_input <- matrix(unlist(lapply(test_tokens,extract_feature,eng_bigrams)), byrow = TRUE, nrow = length(test_tokens)))
 test_input_na <- test_input
 test_input_na[is.infinite(test_input_na)]<-NA
 test_input_na[is.nan(test_input_na)]<-NA
@@ -293,8 +296,8 @@ correctly classified errors
 test_tokens[preds== "0" & test_labels == "0"]
 ```
 classified nonerror as error
-potential cause 1: training vocabulary limited
-suggestion: enlarge training dictionaries
+potential cause 1: too many numbers rejected
+suggestion: put more weight on the feature indicating numeric strings
 potential cause 2: punctuations following a correct string
 suggestion: try modifying features that take into account such cases
 
@@ -303,6 +306,7 @@ test_tokens[preds== "0" & test_labels == "1"]
 ```
 
 classified error as nonerror
+cause: procedure of real label assignment?
 remedy:??? regression defect?
 ```{r}
 test_tokens[preds== "1" & test_labels == "0"]
