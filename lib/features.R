@@ -1,10 +1,11 @@
+cut_bigram <- function(start_pos, token){
+  return(substr(token, start = start_pos, stop = start_pos+1))
+}
+
 bigram_from_token <- function(input_string){
   nb <- nchar(input_string)-1
   if(nb>0){
-    bigram <- rep(NA, nb)
-    for(i in 1:nb){
-      bigram[i]<-substr(input_string,start=i,stop=i+1)
-    }
+    bigram <- lapply(1:nb, cut_bigram, input_string)
   }
   else{
     bigram <- NULL
