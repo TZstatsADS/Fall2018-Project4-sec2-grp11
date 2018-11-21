@@ -1,6 +1,7 @@
 doc_match <- function(tesseract_doc, truth_doc){
   doc_clean_ind <- c()
   line_equal <- TRUE
+  line_diff <- 0
   if(length(tesseract_doc)==length(truth_doc)){
     for (i in 1:length(tesseract_doc)){
       line_clean_ind <- ifelse(tesseract_doc[[i]] %in% truth_doc[[i]],TRUE,FALSE)
