@@ -67,6 +67,7 @@ library(vwr)
 library(liquidSVM)
 
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
+source('../lib/document_match.R')
 source('../lib/features.R')
 source('../lib/svm_cross_validation.R')
 # source('../lib/train_svm.R')
@@ -121,31 +122,49 @@ train data
 # train_file_id <-c(3:10, 17:38, 40:41, 47:68, 75:100)
 # error_train_list <- rep(list(NULL),80)
 # nonerror_train_list <- rep(list(NULL), 80)
+line_diff <- c()
+equal_line_ind <-c()
 ground_truth_all <- c()
 
 train_file_id <-c(9:10, 37:38, 41, 67:68,98:100)
 error_train_list <- rep(list(NULL),10)
 nonerror_train_list <- rep(list(NULL), 10)
 
+# token_match <- function(token, truth_line){
+#   return(ifelse(token %in% truth_line, TRUE, FALSE))
+# }
+# line_match <- function(tesseract_line, truth_line){
+#   line_clean_ind <- unlist(lapply(tesseract_line, token_match, truth_line))
+#   return(line_clean_ind)
+# }
+  
 
+# i = 2
 for (i in 1:10){
 # for (i in 1:80){
   current_file_name <- sub(".txt","",file_name_vec[train_file_id[i]])
 
   ## read the ground truth text
   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
-  clean_ground_truth_txt <-paste(current_ground_truth_txt,collapse = " ")
-  ground_truth_vec <- str_split(clean_ground_truth_txt," ")[[1]]
-  ground_truth_all <- c(ground_truth_all, ground_truth_vec)
-  ground_truth_set <- unique(ground_truth_vec)
-  
+  current_ground_truth_list <- as.list(current_ground_truth_txt)
+  current_ground_truth_list_vec <- lapply(current_ground_truth_list, string_split_1st)
+  current_ground_truth_vec <- unlist(current_ground_truth_list_vec)
+  ground_truth_all <- c(ground_truth_all, current_ground_truth_vec)
 
   ## read the tesseract text
   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
-  clean_tesseract_txt <- paste(current_tesseract_txt, collapse = " ")
-  tesseract_vec <- str_split(clean_tesseract_txt," ")[[1]] # tokens
-  nonerror_train_list[[i]] <- tesseract_vec[tesseract_vec %in% ground_truth_set]
-  error_train_list[[i]] <-tesseract_vec[!tesseract_vec %in% ground_truth_set]
+  current_tesseract_list <- as.list(current_tesseract_txt)
+  current_tesseract_list_vec <- lapply(current_tesseract_list, string_split_1st)
+  current_tesseract_vec <- unlist(current_tesseract_list_vec)
+  
+  #compare tesseract text and ground truth
+  match_result <- doc_match(current_tesseract_list_vec, current_ground_truth_list_vec)
+  current_clean_ind <- match_result[[1]]
+  equal_line_ind <- c(equal_line_ind, match_result[[2]])
+  line_diff <- c(line_diff, match_result[[3]])
+
+  nonerror_train_list[[i]] <- current_tesseract_vec[current_clean_ind]
+  error_train_list[[i]] <-current_tesseract_vec[!current_clean_ind]
 }
 
 # bigrams_all <- unlist(lapply(ground_truth_all, bigram_from_token))
@@ -199,7 +218,8 @@ test data
 # test_file_id <-c(1:2, 11:16, 39, 42:46, 69:74)
 # tesseract_vec_list <- rep(list(NULL), 20)
 # test_labels_list <- rep(list(NULL), 20)
-
+test_equal_line_ind <- c()
+test_line_diff <- c()
 test_file_id <-c(1, 11, 39, 42, 69)
 tesseract_vec_list <- rep(list(NULL), 5)
 test_labels_list <- rep(list(NULL), 5)
@@ -210,18 +230,24 @@ for (i in 1:5){
 
   ## read the ground truth text
   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
-  clean_ground_truth_txt <-paste(current_ground_truth_txt,collapse = " ")
-  ground_truth_vec <- str_split(clean_ground_truth_txt," ")[[1]]
-  ground_truth_set <- unique(ground_truth_vec)
+  current_ground_truth_list <- as.list(current_ground_truth_txt)
+  current_ground_truth_list_vec <- lapply(current_ground_truth_list, string_split_1st)
+  current_ground_truth_vec <- unlist(current_ground_truth_list_vec)
 
   ## read the tesseract text
   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
-  clean_tesseract_txt <- paste(current_tesseract_txt, collapse = " ")
-  tesseract_vec_list[[i]] <- str_split(clean_tesseract_txt," ")[[1]] 
-  test_labels_list[[i]] <- as.factor(ifelse(tesseract_vec_list[[i]] %in% ground_truth_set, 1, 0))
-  # tesseract_if_clean <- unlist(lapply(tesseract_vec,ifCleanToken))
-  # nonerror_test_list[[i]] <- tesseract_vec[tesseract_vec %in% ground_truth_set]
-  # error_test_list[[i]] <-tesseract_vec[!tesseract_vec %in% ground_truth_set]
+  current_tesseract_list <- as.list(current_tesseract_txt)
+  current_tesseract_list_vec <- lapply(current_tesseract_list, string_split_1st)
+  current_tesseract_vec <- unlist(current_tesseract_list_vec)
+  tesseract_vec_list[[i]] <- current_tesseract_vec
+  
+  #compare tesseract text and ground truth
+  match_result <- doc_match(current_tesseract_list_vec, current_ground_truth_list_vec)
+  current_clean_ind <- match_result[[1]]
+  test_equal_line_ind <- c(test_equal_line_ind, match_result[[2]])
+  test_line_diff <- c(test_line_diff, match_result[[3]])
+
+  test_labels_list[[i]] <- as.factor(ifelse(current_clean_ind, 1, 0))
 }
 test_tokens <- unlist(tesseract_vec_list)
 test_labels <- unlist(test_labels_list)
