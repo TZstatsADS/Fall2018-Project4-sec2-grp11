@@ -68,6 +68,7 @@ library(liquidSVM)
 
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
 source('../lib/features.R')
+source('../lib/svm_cross_validation.R')
 # source('../lib/train_svm.R')
 # source('../lib/ifCleanToken.R')
 file_name_vec <- list.files("../data/ground_truth") #100 files in total
@@ -120,7 +121,7 @@ train data
 # train_file_id <-c(3:10, 17:38, 40:41, 47:68, 75:100)
 # error_train_list <- rep(list(NULL),80)
 # nonerror_train_list <- rep(list(NULL), 80)
-# ground_truth_all <- c()
+ground_truth_all <- c()
 
 train_file_id <-c(9:10, 37:38, 41, 67:68,98:100)
 error_train_list <- rep(list(NULL),10)
@@ -135,8 +136,9 @@ for (i in 1:10){
   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
   clean_ground_truth_txt <-paste(current_ground_truth_txt,collapse = " ")
   ground_truth_vec <- str_split(clean_ground_truth_txt," ")[[1]]
-  # ground_truth_all <- c(ground_truth_all, ground_truth_vec)
+  ground_truth_all <- c(ground_truth_all, ground_truth_vec)
   ground_truth_set <- unique(ground_truth_vec)
+  
 
   ## read the tesseract text
   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
@@ -148,87 +150,47 @@ for (i in 1:10){
 
 # bigrams_all <- unlist(lapply(ground_truth_all, bigram_from_token))
 eng_bigrams <- unlist(lapply(english.words, bigram_from_token))
-
+ground_truth_all_set <- unique(ground_truth_all)
 
 nonerror_train <- unique(unlist(nonerror_train_list))
 error_train <- unique(unlist(error_train_list))
 train_tokens <- c(nonerror_train,error_train)
 train_labels <- as.factor(c(rep(1, length(nonerror_train)),rep(0, length(error_train))))
 # source('../lib/features.R')
-system.time(train_input <-matrix(unlist(lapply(train_tokens,extract_feature, eng_bigrams)), byrow = TRUE, nrow = length(train_tokens)))
-train_input_na <- train_input
-train_input_na[is.infinite(train_input_na)]<-NA
-train_input_na[is.nan(train_input_na)]<-NA
-# source('../lib/train_svm.R')
-# library(e1071)
-# library(kernlab)
-# system.time(fit_svm <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", cross=3))
-# fit_svm <- rep(list(NULL),3)
-# system.time(fit_svm[[1]] <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", nu = 0.5, cross=3))
-# system.time(fit_svm[[2]] <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", nu = 0.6, cross=3))
-# system.time(fit_svm[[3]] <- ksvm(x = train_input_na, y = train_labels, type = "C-svc", nu = 0.7, cross=3))
-# library(SwarmSVM)
-# system.time(model <- alphasvm(x = train_input_na, y = train_labels, scale = TRUE, cross = 3))
-# library(liquidSVM)
-# system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels))
+system.time(train_input <-matrix(unlist(lapply(train_tokens,extract_feature, eng_bigrams, ground_truth_all_set)), byrow = TRUE, nrow = length(train_tokens)))
+
 ```
 
 cross validation
+use f1 score 
 ```{r}
+set.seed(1)
 K<-5
-cv.function <- function(X.train, y.train, par, K){
-  n_tokens <- length(y.train)
-  n.fold <- floor(n_tokens/K)
-  s <- sample(rep(1:K, c(rep(n.fold, K-1), n_tokens-(K-1)*n.fold)))  
-  cv.error <- rep(NA, K)
-  
-  for (k in 1:K){
-    train.data <- X.train[s != i, ]
-    train.label <- y.train[s != i]
-    test.data <- X.train[s == i, ]
-    test.label <- y.train[s == i]
-    
-    fit <- mcSVM(train.data, train.label, C = par$C, sigma = par$sigma, KERNEL = "GAUSS_RBF")
-    pred <- predict(fit, test.data)
-    cv.error[k] <- sum(pred != test.label)/length(pred)  
-    
-  }			
-  return(c(mean(cv.error), sd(cv.error)))
-}
-cv_result<-c()
-Cs <- c(0.01, 0.1, 1)
-sigmas <- c(0.01, 0.1, 1)
-# gammas <- c(0.1, 1, 10)
-# lambdas <- c(0.0001,0.001,0.01)
-for(i in 1:length(Cs)){
-  for( j in 1:length(sigmas)){
-    pars = list("C"=Cs[i],"sigma"=sigmas[j])
-    system.time(cv_result <- rbind(cv_result, 
-                                   cv.function(train_input_na,train_labels,pars,K)))
+
+cv_result<-matrix(NA, nrow = 3, ncol = 3)
+# Cs <- c(0.01, 0.1, 1)
+# sigmas <- c(0.01, 0.1, 1)
+# cv_time <- matrix(NA, nrow = length(Cs), ncol = length(sigmas))
+gammas <- c(1, 10, 25)
+lambdas <- c(0.00005, 0.0002,0.001)
+for(i in 1:length(gammas)){
+  for( j in 1:length(lambdas)){
+    pars = list("gamma"=gammas[i],"lambda"=lambdas[j])
+    system.time(cv_result[i,j] <- cv.function(train_input,train_labels,pars,K))
   }
 }
+cv_result
+best_ind <- which(cv_result == max(cv_result), arr.ind = TRUE)
+best_gamma <- gammas[best_ind[1]]
+best_lambda <- lambdas[best_ind[2]]
 
-best_C_ind <- which.min(cv_result[,1])%/%length(sigmas)+1
-best_sigma_ind <- which.min(cv_result[,1])%%length(sigmas)
-best_C <- Cs[best_C_ind]
-best_sigma <- sigmas[best_sigma_ind]
-
-# best_gamma_ind <- which.max(cv_result[,1])%/%length(lambdas)+1
-# best_lambda_ind <- which.max(cv_result[,1])%%length(lambdas)
-# best_gamma <- gammas[best_gamma_ind]
-# best_lambda <- lambdas[best_lambda_ind]
-
-# system.time(fit_mcsvm <- mcSVM(x = train_input_na, y = train_labels, gamma = 0.1))
-# system.time(fit_mcsvm2 <- mcSVM(x = train_input_na, y = train_labels, lambda = 0.001))
-#KERNEL = GAUSS_RBF
 ```
 train
 ```{r}
-best_C <- 1
-best_sigma <- 0.1
-system.time(fit_svm <- mcSVM(x = train_input_na, y = train_labels, 
-                             C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
-# system.time(fit_svm_auto <- mcSVM(x = train_input_na, y = train_labels))
+best_gamma <- 10
+best_lambda <- 0.0002
+system.time(fit_svm <- mcSVM(x = train_input, y = train_labels, 
+                             gamma = best_gamma, lambda = best_lambda, KERNEL = "GAUSS_RBF"))
 ```
 
 
@@ -263,11 +225,12 @@ for (i in 1:5){
 }
 test_tokens <- unlist(tesseract_vec_list)
 test_labels <- unlist(test_labels_list)
-system.time(test_input <- matrix(unlist(lapply(test_tokens,extract_feature,eng_bigrams)), byrow = TRUE, nrow = length(test_tokens)))
-test_input_na <- test_input
-test_input_na[is.infinite(test_input_na)]<-NA
-test_input_na[is.nan(test_input_na)]<-NA
-system.time(preds <- predict(fit_svm, test_input_na))
+system.time(test_input <- matrix(unlist(lapply(test_tokens,extract_feature,eng_bigrams, ground_truth_all_set)), byrow = TRUE, nrow = length(test_tokens)))
+# test_input_na <- test_input
+# test_input_na[is.infinite(test_input_na)]<-NA
+# test_input_na[is.nan(test_input_na)]<-NA
+system.time(preds <- predict(fit_svm, test_input))
+table(preds, test_labels)
 # system.time(preds <- predict(model, test_input_na))
 
 
@@ -281,35 +244,44 @@ system.time(preds <- predict(fit_svm, test_input_na))
 ```
 
 detection evaluation
-
+The problem with the algorithm, even embedded in the evaluation is that it is token-wise. A correct token in itself does not necessarily mean that it is right in that position. e.g. The OCR read "staff" as "5" in the first file, but "5" may exists in the whole corpus for the ground truth. In this way, a "5" at any position will be treated as correct. But obviously we cannot assign some of "5"s to the correct class, some to "error", because the svm classification is token-by-token.
 
 ```{r}
 #false negative for errors causes more severe consequence than false positive, as there is a procedure for correction after the detection which can somehow filter out the false postive, while false negative are errors that are totally ignored
-table(preds, test_labels)
+
 #correctly classified nonerror
 #mostly stopwords
-test_tokens[preds== "1" & test_labels == "1"]
+sample(test_tokens[preds== "1" & test_labels == "1"], 100)
+correct_nonerror_features <- round(colMeans(test_input[which(preds =="1" & test_labels == "1"),]),2) 
+correct_nonerror_features
 ```
 
 correctly classified errors
 ```{r}
-test_tokens[preds== "0" & test_labels == "0"]
+sample(test_tokens[preds== "0" & test_labels == "0"], 100)
+correct_error_features <- round(colMeans(test_input[which(preds =="0" & test_labels == "0"),]),2)
+correct_error_features
 ```
 classified nonerror as error
 potential cause 1: too many numbers rejected
-suggestion: put more weight on the feature indicating numeric strings
+suggestion: put more weight on the feature indicating numeric strings for classification
 potential cause 2: punctuations following a correct string
 suggestion: try modifying features that take into account such cases
-
+potential cause 3: the ground truth itself contains formatting error, e.g. expected separation in a single word
+potential cause 4: english names not included in english words
 ```{r}
-test_tokens[preds== "0" & test_labels == "1"]
+sample(test_tokens[preds== "0" & test_labels == "1"],100)
+nonerror_as_error_features <- round(colMeans(test_input[which(preds =="0" & test_labels == "1"),]),2)
+nonerror_as_error_features
 ```
 
 classified error as nonerror
 cause: procedure of real label assignment?
 remedy:??? regression defect?
 ```{r}
-test_tokens[preds== "1" & test_labels == "0"]
+sample(test_tokens[preds== "1" & test_labels == "0"],100)
+error_as_nonerror_features <- round(colMeans(test_input[which(preds =="1" & test_labels == "0"),]),2)
+error_as_nonerror_features
 ```
 
 examine vocabulary-based features effect on svm (bigram & levenshtein distance)
@@ -317,8 +289,8 @@ suggestion: add more vocabulary-based features and modify the self-based feature
 ```{r}
 #in fact need another CV here
 #using features excluding 2
-train_input_self <- train_input_na[,-c(19,22)]
-test_input_self <- test_input_na[,-c(19,22)]
+train_input_self <- train_input[,-c(19,22)]
+test_input_self <- test_input[,-c(19,22)]
 system.time(fit_svm_self <- mcSVM(x = train_input_self, y = train_labels, 
                                   C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
 system.time(preds_self <- predict(fit_svm_self, test_input_self))
@@ -328,8 +300,8 @@ table(preds_self, test_labels)
 ```
 ```{r}
 #in fact need another CV here
-train_input_voc <- train_input_na[,c(19,22)]
-test_input_voc <- test_input_na[,c(19,22)]
+train_input_voc <- train_input[,c(19,22)]
+test_input_voc <- test_input[,c(19,22)]
 system.time(fit_svm_voc <- mcSVM(x = train_input_voc, y = train_labels,
                                  C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
 system.time(preds_voc <- predict(fit_svm_voc, test_input_voc))
