@@ -57,319 +57,432 @@ In this project, we are going to **focus on the third stage -- post-processing**
 # Step 1 - Load library and source code
 ```{r, warning=FALSE, message = FALSE}
 # setwd("F:/huihui/ADS/proj4/Fall2018-Project4-sec2--sec2proj4_grp11-master/doc")
-if (!require("devtools")) install.packages("devtools")
+packages.used <- c("devtools","vwr","kernlab")
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used,intersect(installed.packages()[,1], packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)
+}
 if (!require("pacman")) {
   ## devtools is required
   library(devtools)
   install_github("trinker/pacman")
 }
 library(vwr)
-library(liquidSVM)
+library(kernlab)
 
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
 source('../lib/document_match.R')
 source('../lib/features.R')
 source('../lib/svm_cross_validation.R')
-# source('../lib/train_svm.R')
-# source('../lib/ifCleanToken.R')
+source('../lib/test_result.R')
 file_name_vec <- list.files("../data/ground_truth") #100 files in total
 ```
 
 # Step 2 - read the files and conduct Tesseract OCR
 
-Although we have processed the Tesseract OCR and save the output txt files in the `data` folder, we include this chunk of code in order to make clear the whole pipeline to you.
-
-```{r, eval=FALSE}
-# for(i in c(1:length(file_name_vec))){
-#   current_file_name <- sub(".txt","",file_name_vec[i])
-#   ## png folder is not provided on github (the code is only on demonstration purpose)
-#   current_tesseract_txt <- tesseract::ocr(paste("../data/png/",current_file_name,".png",sep=""))
-#   
-#   ### clean the tessetact text (separate line by "\n", delete null string, transter to lower case)
-#   clean_tesseract_txt <- strsplit(current_tesseract_txt,"\n")[[1]]
-#   clean_tesseract_txt <- clean_tesseract_txt[clean_tesseract_txt!=""]
-#   
-#   ### save tesseract text file
-#   writeLines(clean_tesseract_txt, paste("../data/tesseract/",current_file_name,".txt",sep=""))
-# }
-```
-
 # Step 3 - Error detection
 
-Now, we are ready to conduct post-processing, based on the Tessearct OCR output. First of all, we need to detect errors, or *incorrectly processed words* -- check to see if an input string is a valid dictionary word or if its n-grams are all legal.
+Now, we are ready to conduct post-processing, based on the Tessearct OCR output. First of all, we need to detect errors, or *incorrectly processed words*.
 
-The referenced papers are:
-
-1. [Rule-based techniques](http://webpages.ursinus.edu/akontostathis/KulpKontostathisFinal.pdf)
-
-- rules are in the section 2.2 
-
-2. [Letter n-gram](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=1672564)
-
-- focus on positional binary digram in section 3-a.error detection
-
-3. Probabilistic techniques -- [SVM garbage detection](https://dl.acm.org/citation.cfm?doid=2034617.2034626)
-
+The referenced paper is:
+Probabilistic techniques -- [SVM garbage detection](https://dl.acm.org/citation.cfm?doid=2034617.2034626)
 - features are in section 5 (you can choose not to implement ‘Levenshtein distance’ feature)
 
+## Step 3.1 - Data preperation
+First, we do the data preparation for all 100 tesseract files, to label all the tokens as nonerror or error, using line-by-line comparison.
+```{r prepare data from all 100 files for both classes}
+## initialze variables
+line_diff <- rep(NA, 100)
+ground_truth_list <- list()
+ground_truth_list_vec <- list()
+tesseract_list <- list()
+tesseract_list_vec <- list()
+error_list <- list()
+nonerror_list <- list()
+clean_ind_list <- list()
+tokens_per_line_list <- list()
+truth_tokens_per_line_list <- list()
 
-In this statercode, we implement the first three rules in the first paper -- rule based techniques, as an example.
-
-train data
-```{r}
-#100 files 5 groups - grp1(1:10),grp2(11:38),grp3(39:41),grp4(42:68),grp5(69:100) (10, 28, 3, 27, 32)files respectively
-#select 8,22,2,22,26 files from each group as the training set
-# train_file_id <-c(3:10, 17:38, 40:41, 47:68, 75:100)
-# error_train_list <- rep(list(NULL),80)
-# nonerror_train_list <- rep(list(NULL), 80)
-line_diff <- c()
-equal_line_ind <-c()
-ground_truth_all <- c()
-
-train_file_id <-c(9:10, 37:38, 41, 67:68,98:100)
-error_train_list <- rep(list(NULL),10)
-nonerror_train_list <- rep(list(NULL), 10)
-
-# token_match <- function(token, truth_line){
-#   return(ifelse(token %in% truth_line, TRUE, FALSE))
-# }
-# line_match <- function(tesseract_line, truth_line){
-#   line_clean_ind <- unlist(lapply(tesseract_line, token_match, truth_line))
-#   return(line_clean_ind)
-# }
-  
-
-# i = 2
-for (i in 1:10){
-# for (i in 1:80){
-  current_file_name <- sub(".txt","",file_name_vec[train_file_id[i]])
+for (i in 1:100){
+  current_file_name <- sub(".txt","",file_name_vec[i])
 
   ## read the ground truth text
   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
-  current_ground_truth_list <- as.list(current_ground_truth_txt)
-  current_ground_truth_list_vec <- lapply(current_ground_truth_list, string_split_1st)
+  # for the current file, construct lists of vectors, each list representing one line, make a list for 100 files
+  current_ground_truth_list_vec <- lapply(current_ground_truth_txt, stringsplit_1st)
+  ground_truth_list_vec[[i]] <- current_ground_truth_list_vec
+  # count the number of tokens in each line for the current file, make a list for all 100 files
+  truth_tokens_per_line <- unlist(lapply(current_ground_truth_list_vec, length))
+  truth_tokens_per_line_list[[i]] <- truth_tokens_per_line
+  # create a vector including all the tokens in the current file, make a list for all 100 files
   current_ground_truth_vec <- unlist(current_ground_truth_list_vec)
-  ground_truth_all <- c(ground_truth_all, current_ground_truth_vec)
+  ground_truth_list[[i]] <- current_ground_truth_vec
 
-  ## read the tesseract text
+  ## read the tesseract text :procedure similar to the ground truth files
   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
-  current_tesseract_list <- as.list(current_tesseract_txt)
-  current_tesseract_list_vec <- lapply(current_tesseract_list, string_split_1st)
+  current_tesseract_list_vec <- lapply(current_tesseract_txt, stringsplit_1st)
+  tesseract_list_vec[[i]] <- current_tesseract_list_vec
+  tokens_per_line <- unlist(lapply(current_tesseract_list_vec, length))
+  tokens_per_line_list[[i]] <- tokens_per_line
   current_tesseract_vec <- unlist(current_tesseract_list_vec)
+  tesseract_list[[i]] <- current_tesseract_vec 
   
-  #compare tesseract text and ground truth
+  ## compare tesseract text and ground truth, basically line by line match, see details below
   match_result <- doc_match(current_tesseract_list_vec, current_ground_truth_list_vec)
-  current_clean_ind <- match_result[[1]]
-  equal_line_ind <- c(equal_line_ind, match_result[[2]])
-  line_diff <- c(line_diff, match_result[[3]])
+  # get the token-clean indicators for each line
+  current_clean_ind_list <- match_result[[1]]
+  # combine the result for each line into one vector for one file, and make a list for all 100 files
+  current_clean_ind <- unlist(current_clean_ind_list)
+  clean_ind_list[[i]] <- current_clean_ind
+  # get the result for any diffences in number of lines between the tesseract file and the ground truth
+  line_diff[i] <- match_result[[2]]
 
-  nonerror_train_list[[i]] <- current_tesseract_vec[current_clean_ind]
-  error_train_list[[i]] <-current_tesseract_vec[!current_clean_ind]
+  # get a vector of errors for the current tesseract file and make a list for all 100 files
+  error_list[[i]] <-current_tesseract_vec[!current_clean_ind]
+  # similarly for nonerrors
+  nonerror_list[[i]] <-current_tesseract_vec[current_clean_ind]
 }
 
-# bigrams_all <- unlist(lapply(ground_truth_all, bigram_from_token))
-eng_bigrams <- unlist(lapply(english.words, bigram_from_token))
-ground_truth_all_set <- unique(ground_truth_all)
-
-nonerror_train <- unique(unlist(nonerror_train_list))
-error_train <- unique(unlist(error_train_list))
-train_tokens <- c(nonerror_train,error_train)
-train_labels <- as.factor(c(rep(1, length(nonerror_train)),rep(0, length(error_train))))
-# source('../lib/features.R')
-system.time(train_input <-matrix(unlist(lapply(train_tokens,extract_feature, eng_bigrams, ground_truth_all_set)), byrow = TRUE, nrow = length(train_tokens)))
-
+#compute the ground truth mean number of tokens per line
+truth_mean_tokens_per_line <- mean(unlist(lapply(truth_tokens_per_line_list, mean)))
+#do the same for tesseract
+tesseract_mean_tokens_per_line <- mean(unlist(lapply(tokens_per_line_list, mean)))
+```
+The probability is very small for the same token appearing in the same line both as error and as nonerror , at least smaller than that probability in the same document, so we compare each line instead of each document - token-wise comparisons will be harder as there are split and merge of tokens during OCR.
+```{r file example}
+#split of tokens e.g. "improvement" into "1mprove" and "ent"
+cat("split of token example: \n")
+cat("group5_00000012_9.txt 60th line \n")
+cat("ground turth: ", ground_truth_list_vec[[100]][[60]], "\n")
+cat("tesseract: ", tesseract_list_vec[[100]][[60]], "\n")
+```
+```{r}
+cat("ground truth mean number of tokens per line =", truth_mean_tokens_per_line, "\n")
+cat("tesseract mean number of tokens per line =", tesseract_mean_tokens_per_line, "\n")
+# check the differences between number of lines for the files whose lines don't match
+cat("difference in number of lines between tesseract and ground truth files \n")
+line_diff
 ```
 
-cross validation
-use f1 score 
+13 out of 100 tesseract documents don't match with the number of lines in the corresponding ground truth document. But none of them have more lines than ground truth. 12 have 1 fewer line, 1 has 2 fewer lines than the ground truth. In such cases, we match the current line of tesseract with the same line as well as the 1 or 2 lines that follow that line in the document , because we do not know which line tessearct omitted(see algorithm in "lib/document_match.R"). The match will be less precise than line-by-line, but ignorable - at least still far better than matching in the whole document.e.g. 100th document, "90" is read by OCR as "an". "an" itself may not be an erroneous word in the document, but it is not correct at that position
+```{r file example}
+# "90" as "an", so "an" would appear in both ground truth but it is not correct at that position
+cat("example of occurrence of a single token as both error and nonerror: \"an\" \n")
+cat("group5_00000012_9.txt 647th line \n")
+cat("ground turth: ", ground_truth_list_vec[[100]][[647]], "\n")
+cat("tesseract: ", tesseract_list_vec[[100]][[647]], "\n")
+cat("group5_00000012_9.txt 93rd line \n")
+cat("ground turth: ", ground_truth_list_vec[[100]][[93]], "\n")
+cat("tesseract: ", tesseract_list_vec[[100]][[93]], "\n")
+```
+
+
+
+## Step 3.2 - Train SVM
+
+### Step 3.2.1 - Training data preparation
+We first prepare the training data, the bulk of this part is to extract the 22 features for each token. For the training data of correct tokens, we use the correct tokens in the 80 tesseract files; for the class of errors, we use the erroneous tokens in the 80 tesseract files. 
+
+We don't use the ground truth as nonerror for two reasons: 
+
+1. the 80 files of ground truth have more data, which will increase running time. 
+
+2. using nonerror in tesseract files have can reflect the true situations in OCR word recognition.
+```{r training data preparation}
+# 100 files 5 groups - grp1(1:10),grp2(11:38),grp3(39:41),grp4(42:68),grp5(69:100) (10, 28, 3, 27, 32)files respectively
+# select 8,22,2,22,26 files from each group as the training set
+train_file_id <-c(3:10, 17:38, 40:41, 47:68, 75:100)
+# train_file_id <-c(9:10, 37:38, 41, 67:68,98:100)
+# train_file_id <-c(9:10)
+train_error <- unlist(error_list[train_file_id])
+train_nonerror <- unlist(nonerror_list[train_file_id])
+train_truth <- unlist(ground_truth_list[train_file_id])
+train_tokens <- c(train_error, train_nonerror)
+# extract the features for unique tokens first instead of all tokens to save time
+train_truth_unique <- unique(train_truth)
+train_truth_bigrams <- tolower(unlist(lapply(train_truth, bigram_from_token)))
+train_tokens_unique <- unique(c(train_error, train_nonerror))
+time_extract_train <- system.time(train_input_unique <-matrix(unlist(lapply(train_tokens_unique,extract_feature, train_truth_bigrams, train_truth_unique)), byrow = TRUE, nrow = length(train_tokens_unique)))
+rownames(train_input_unique) <- train_tokens_unique
+train_labels_unique <- ifelse(train_tokens_unique %in% train_nonerror, TRUE, FALSE)
+names(train_labels_unique) <- train_tokens_unique
+```
+
+The computational cost of training the svm for all the tokens in the corpus is very high (several hours). One way to reduce training time is to use each token only once in each class. However, some tokens appear in both classes, such as "a", hence using only unique tokens in the two classes would cause a problem: the frequencies of this token in each class is not considered in the training. e.g. the token "a" appears 3354 times in the correct tokens class and only 269 times in the error class in the training set. 
+```{r file example}
+cat("number of times the token \"a\" appears in the class of nonerrors in the training set:", sum(train_nonerror == "a"), "\n")
+
+cat("number of times the token \"a\" appears in the class of errors in the training set:", sum(train_error == "a"), "\n")
+```
+Potential improvement: include this frequency information as another feature. 
+
+Because we need to retrain svm several times for experiment, to save time, we use every token only once in training, and put it in the nonerror class as long as it has appeared at least once in the training ground truth. Since for a certain token, whichever class it is in, its features are exactly the same.
+```{r number of all tokens VS number of unique tokens}
+cat("number of all tokens in the training set:", length(train_tokens), "\n")
+cat("number of unique tokens in the training set:", length(train_tokens_unique), "\n")
+cat("lexical density =", round(length(train_tokens_unique)/length(train_tokens),2),"\n")
+cat("Using unique tokens, we could probably reduce the time for feature extraction by ", round(100*(1-length(train_tokens_unique)/length(train_tokens)),2), "%, ","and even more for svm training since the training time for svm does not increase linearly with the increase of amount of data input.", sep = "", "\n")
+```
+
+```{r}
+unique_in_train <- TRUE
+if(unique_in_train){
+  train_input <- train_input_unique
+  train_labels <- train_labels_unique
+} else {
+  #repeat for each token their frequencies in the training data as the final training input
+  train_input <- matrix(unlist(lapply(train_tokens, get_line_input, train_input_unique)), byrow = TRUE, ncol = ncol(train_input_unique))
+  rownames(train_input) <- train_tokens
+  train_labels <- c(rep(FALSE, length(train_error)),rep(TRUE, length(train_truth)))
+  names(train_labels) <- train_tokens
+}
+```
+
+### Step 3.2.2 - Cross validation
+Here we perform a 5-fold cross validation for the svm model using F1 score for error. The F1 score is the harmonic mean of precison and recall. We compute the error precision and recall because the errors are what matter most here - we need to correct them.
+
+\begin{align*}
+\mbox{error precision}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of real errors}}\\
+\mbox{error recall}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of tokens classified as errors}}
+\mbox{error F1 score}&=\frac{\mbox{2 x error precison x error recall}}{\mbox{error precison + error recall}}
+\end{align*}
+
+The tuning parameter is the bandwidth for the Gaussian kernel(as stated in the paper), sigma.
+```{r cross validation}
+# 5-fold cross validation for tuning the bandwith parameter sigma
+cv <- perform_cv(train_input, train_labels)
+cv_result <- cv$cv_result
+best_sigma <- cv$best_sigma
+```
+### Step 3.2.3 - Train SVM model
 ```{r}
 set.seed(1)
-K<-5
-
-cv_result<-matrix(NA, nrow = 3, ncol = 3)
-# Cs <- c(0.01, 0.1, 1)
-# sigmas <- c(0.01, 0.1, 1)
-# cv_time <- matrix(NA, nrow = length(Cs), ncol = length(sigmas))
-gammas <- c(1, 10, 25)
-lambdas <- c(0.00005, 0.0002,0.001)
-for(i in 1:length(gammas)){
-  for( j in 1:length(lambdas)){
-    pars = list("gamma"=gammas[i],"lambda"=lambdas[j])
-    system.time(cv_result[i,j] <- cv.function(train_input,train_labels,pars,K))
+best_sigma <- 0.1
+time_trainsvm <- (system.time(fit_svm <- ksvm(x = train_input, y = as.factor(train_labels), type = "C-svc", kernel = "rbfdot", kpar =list(sigma = best_sigma))))
+```
+## Step 3.3 - Test SVM
+We use the rest 20 tesseract files of tokens as the test data.
+```{r test data preperation}
+test_file_id <-c(1:2, 11:16, 39, 42:46, 69:74)
+# test_file_id <-c(1, 11, 39, 42, 69)
+# test_file_id <- 1:2
+preds_list <- list()
+# lists of test tokens, each list for one file
+test_tokens_list <- tesseract_list[test_file_id]
+# labels are logical TRUE/FALSE
+test_labels_list <- clean_ind_list[test_file_id]
+# we make a list of matrices for the input features instead of collapsing into one matrix for future document match on the corrected errors
+time_extract_test <- system.time(test_input_list <- lapply(test_tokens_list, token_to_input_format, train_truth_bigrams, train_truth))
+# perform prediction of the svm model on the test set
+time_predict <- system.time(
+  for(i in 1:length(test_input_list)){
+    preds_list[[i]] <- as.logical(predict(fit_svm, test_input_list[[i]]))
   }
-}
-cv_result
-best_ind <- which(cv_result == max(cv_result), arr.ind = TRUE)
-best_gamma <- gammas[best_ind[1]]
-best_lambda <- lambdas[best_ind[2]]
-
-```
-train
-```{r}
-best_gamma <- 10
-best_lambda <- 0.0002
-system.time(fit_svm <- mcSVM(x = train_input, y = train_labels, 
-                             gamma = best_gamma, lambda = best_lambda, KERNEL = "GAUSS_RBF"))
+)
 ```
 
 
-test data
-```{r}
-# test_file_id <-c(1:2, 11:16, 39, 42:46, 69:74)
-# tesseract_vec_list <- rep(list(NULL), 20)
-# test_labels_list <- rep(list(NULL), 20)
-test_equal_line_ind <- c()
-test_line_diff <- c()
-test_file_id <-c(1, 11, 39, 42, 69)
-tesseract_vec_list <- rep(list(NULL), 5)
-test_labels_list <- rep(list(NULL), 5)
 
-for (i in 1:5){
-# for (i in 1:20){
-  current_file_name <- sub(".txt","",file_name_vec[test_file_id[i]])
-
-  ## read the ground truth text
-  current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
-  current_ground_truth_list <- as.list(current_ground_truth_txt)
-  current_ground_truth_list_vec <- lapply(current_ground_truth_list, string_split_1st)
-  current_ground_truth_vec <- unlist(current_ground_truth_list_vec)
-
-  ## read the tesseract text
-  current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
-  current_tesseract_list <- as.list(current_tesseract_txt)
-  current_tesseract_list_vec <- lapply(current_tesseract_list, string_split_1st)
-  current_tesseract_vec <- unlist(current_tesseract_list_vec)
-  tesseract_vec_list[[i]] <- current_tesseract_vec
-  
-  #compare tesseract text and ground truth
-  match_result <- doc_match(current_tesseract_list_vec, current_ground_truth_list_vec)
-  current_clean_ind <- match_result[[1]]
-  test_equal_line_ind <- c(test_equal_line_ind, match_result[[2]])
-  test_line_diff <- c(test_line_diff, match_result[[3]])
-
-  test_labels_list[[i]] <- as.factor(ifelse(current_clean_ind, 1, 0))
-}
-test_tokens <- unlist(tesseract_vec_list)
-test_labels <- unlist(test_labels_list)
-system.time(test_input <- matrix(unlist(lapply(test_tokens,extract_feature,eng_bigrams, ground_truth_all_set)), byrow = TRUE, nrow = length(test_tokens)))
-# test_input_na <- test_input
-# test_input_na[is.infinite(test_input_na)]<-NA
-# test_input_na[is.nan(test_input_na)]<-NA
-system.time(preds <- predict(fit_svm, test_input))
-table(preds, test_labels)
-# system.time(preds <- predict(model, test_input_na))
-
-
-# system.time(preds_auto <- predict(fit_svm_auto, test_input_na))
-# table(preds_auto, test_labels)
-# system.time(predsmc <- predict(fit_mcsvm, test_input_na))
-# table(predsmc, test_labels)
-# 
-# system.time(predsmc2 <- predict(fit_mcsvm2, test_input_na))
-# table(predsmc2, test_labels)
-```
-
-detection evaluation
-The problem with the algorithm, even embedded in the evaluation is that it is token-wise. A correct token in itself does not necessarily mean that it is right in that position. e.g. The OCR read "staff" as "5" in the first file, but "5" may exists in the whole corpus for the ground truth. In this way, a "5" at any position will be treated as correct. But obviously we cannot assign some of "5"s to the correct class, some to "error", because the svm classification is token-by-token.
-
-```{r}
-#false negative for errors causes more severe consequence than false positive, as there is a procedure for correction after the detection which can somehow filter out the false postive, while false negative are errors that are totally ignored
-
-#correctly classified nonerror
-#mostly stopwords
-sample(test_tokens[preds== "1" & test_labels == "1"], 100)
-correct_nonerror_features <- round(colMeans(test_input[which(preds =="1" & test_labels == "1"),]),2) 
-correct_nonerror_features
-```
-
-correctly classified errors
-```{r}
-sample(test_tokens[preds== "0" & test_labels == "0"], 100)
-correct_error_features <- round(colMeans(test_input[which(preds =="0" & test_labels == "0"),]),2)
-correct_error_features
-```
-classified nonerror as error
-potential cause 1: too many numbers rejected
-suggestion: put more weight on the feature indicating numeric strings for classification
-potential cause 2: punctuations following a correct string
-suggestion: try modifying features that take into account such cases
-potential cause 3: the ground truth itself contains formatting error, e.g. expected separation in a single word
-potential cause 4: english names not included in english words
-```{r}
-sample(test_tokens[preds== "0" & test_labels == "1"],100)
-nonerror_as_error_features <- round(colMeans(test_input[which(preds =="0" & test_labels == "1"),]),2)
-nonerror_as_error_features
-```
-
-classified error as nonerror
-cause: procedure of real label assignment?
-remedy:??? regression defect?
-```{r}
-sample(test_tokens[preds== "1" & test_labels == "0"],100)
-error_as_nonerror_features <- round(colMeans(test_input[which(preds =="1" & test_labels == "0"),]),2)
-error_as_nonerror_features
-```
-
-examine vocabulary-based features effect on svm (bigram & levenshtein distance)
-suggestion: add more vocabulary-based features and modify the self-based features to fit the classificaiton of error and nonerror instead of garbage and nongarbage
-```{r}
-#in fact need another CV here
-#using features excluding 2
-train_input_self <- train_input[,-c(19,22)]
-test_input_self <- test_input[,-c(19,22)]
-system.time(fit_svm_self <- mcSVM(x = train_input_self, y = train_labels, 
-                                  C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
-system.time(preds_self <- predict(fit_svm_self, test_input_self))
-table(preds_self, test_labels)
-
-#using only non-vocabulary-based features defined in the paper for garbage detection, we get more false positives for errors. The overall performance is not obviously better than a random classifier. 
-```
-```{r}
-#in fact need another CV here
-train_input_voc <- train_input[,c(19,22)]
-test_input_voc <- test_input[,c(19,22)]
-system.time(fit_svm_voc <- mcSVM(x = train_input_voc, y = train_labels,
-                                 C = best_C, sigma = best_sigma, KERNEL = "GAUSS_RBF"))
-system.time(preds_voc <- predict(fit_svm_voc, test_input_voc))
-table(preds_voc, test_labels)
-#using only vocabulary-based features is slightly better than non-vocabulary-based features, but it is still much worse than using all the features. But putting together the false negatives for errors are worse than using only vocabulary-based features, and the true positives for errors are slightly worse. Considering the later procedure for correction, maybe using only vocabulary-based features are better for the overall OCR post-processing performance. But it also depends on the correction methods - if it is able to leave the tokens that don't need to be corrected as they are and the time it takes for correction.
-```
-
-
-```{r}
-## detect tesseract word error
-tesseract_vec <- str_split(clean_tesseract_txt," ")[[1]] #1124 tokens
-tesseract_if_clean <- unlist(lapply(tesseract_vec,ifCleanToken)) # source code of ifCleanToken in in lib folder
-```
 
 # Step 4 - Error correction
+<!-- variables for to be used for correction only - to evaluate solely the correction performance -->
+<!-- clean_ind_list -->
+<!-- tesseract_list -->
 
-Given the detected word error, in order to find the best correction, we need to generating the candidate corrections: a dictionary or a database of legal n-grams to locate one or more potential correction terms. Then we need invoke some lexical-similarity measure between the misspelled string and the candidates or a probabilistic estimate of the likelihood of the correction to rank order the candidates.
+<!-- variables for to be used for correction only - to evaluate overall detection and correction performance -->
+<!-- preds_list -->
+<!-- test_input_list -->
 
-The referenced papers are:
 
-1. [Letter n-gram](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=1672564}{positional binary digram)
+<!-- C-4 potential problems -->
+<!-- 1.not considering split or merge of tokens -->
+<!-- 2.not considering confusion between letters and other symbols (e.g. numbers) see above examples -->
 
-- focus on section 3-b.error correction
+Given the detected word error, in order to find the best correction, we need to generate the candidate corrections: a dictionary or a database of legal n-grams to locate one or more potential correction terms. Then we need invoke some lexical-similarity measure between the misspelled string and the candidates or a probabilistic estimate of the likelihood of the correction to rank order the candidates.
 
-2. Supervised model -- [correction regressor](https://arxiv.org/pdf/1611.06950.pdf)
-
-3. [probability scoring without context](https://link.springer.com/content/pdf/10.1007%2FBF01889984.pdf)
-
-- focus on section 3
+The referenced paper is:
 
 4. [probability scoring with contextual constraints](https://link.springer.com/content/pdf/10.1007%2FBF01889984.pdf)
 
 - focus on section 5
 
-5. [topic models](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4377099)
+# Step 5 - Performance measure
 
-Here, in our code, we just simply remove the detected-errors.
-```{r}
-tesseract_delete_error_vec <- tesseract_vec[tesseract_if_clean] #1095
+## Step 5.1 Detection performance measure
+### Step 5.1.1 Evaluation on overall SVM detection performance
+Again we compute the error precision and error recall.  Also, the error matrix and overall accuracy are provided as a reference. In the error matrix, "FALSE" represents error and "TRUE" represents nonerror. The values in the error matrix is the fraction of all the data tested.
+```{r error matrix}
+preds <- unlist(preds_list)
+test_labels <- unlist(test_labels_list)
+m <- table(preds, test_labels)/length(preds)
+error_precision <-list(m[1,1]/sum(m[1,]))
+error_recall <- list(m[1,1]/sum(m[,1]))
+accuracy <- list(m[1,1]+m[2,2])
+cat("error matrix: \n")
+m
+cat("error precision = ", error_precision[[1]], "\n")
+cat("error recall = ", error_recall[[1]], "\n")
+cat("overall accuracy = ", accuracy[[1]], "\n")
 ```
 
-# Step 5 - Performance measure
+\begin{align*}
+\mbox{error precision}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of real errors}}\\
+\mbox{error recall}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of tokens classified as errors}}
+\end{align*}
+
+From the error matrix and related rates computation, we see that the svm classifier can classify the tokens to their own classes to a certain accuracy, 0.8815 here. But there is still much space for improvement. Let's look closer to see what the classifier did and where the problems lie.
+### Step 5.1.2 Evaluation on SVM performance in details
+```{r test result examples}
+results <- get_result(test_file_id,test_tokens_list, test_labels_list,preds_list)
+true_positive_error <- unlist(results[[1]])
+true_negative_error <- unlist(results[[2]])
+false_positive_error <- unlist(results[[3]])
+false_negative_error <- unlist(results[[4]])
+
+set.seed(1)
+cat("a sample of correctly detected errors (true positive): \n")
+sample(true_positive_error, 100)
+cat("a sample of correctly detected correct tokens (true negative): \n")
+sample(true_negative_error, 100)
+cat("a sample of correct tokens classified as error (false positive): \n")
+sample(false_positive_error, 100)
+cat("a sample of undetected error (false negative): \n")
+sample(false_negative_error, 100)
+
+```
+Punctuation:
+Even in the nonerror lists (check using true negative and false positive examples), punctuations tend to follow directly the words - within token punctuation, but some times, the punctuation is caused by error. This is hard for the classifier to tell. This is difficult even for human. But if we know the tokens around the token in concern, it is probably easier to make a decision.
+
+Letter Case:
+Sometimes, OCR simply changed the letter case of the word, although this poses no problem for the correct spelling of the word, e.g. "REGULATORY", "Roomy" are errors but classified as nonerror. This problem can be somehow alleviated if the information of the punctuation of the previous token (context) can be taken into consideration.
+
+Short tokens:
+We can see that a lot of short tokens are wrongly classified (check using false positive and false negative examples). A particular unigram or bigram can only be categorized as either error or nonerror exclusively, but most of the time they are in both categories, with different frequencies. It is difficult for the classifier to judge using this little information of the token itself. Context needs to be taken into consideration. Token-wise classification without basis on contents have 2 problems: difficulty in data preperation for error and nonerror(as stated before) & difficulty in predicting use just that token. For example "a" appear a lot in the false positive for errors.
+
+Numbers:
+Again, without context, it is difficult for human to tell if a number is correct token or error. The classification on numbers at present is quite random from the result. For example, in the first document, OCR read "staff" as "5".
+```{r}
+cat("group1_00000005.txt 2nd line \n")
+cat("ground turth: ", ground_truth_list_vec[[1]][[2]], "\n")
+cat("tesseract: ", tesseract_list_vec[[1]][[2]], "\n")
+```
+
+
+What the classifier did well: 
+Correct classification of obvious errors - misspelling of a word, e.g. confusion of "i","l","I", "1". This happens very frequently in OCR. 
+Normally correct English words are classified well, for which the distance feature is very important. And bigram feature may also contribute. To check, remove these features and compare.
+
+
+### Step 5.1.3 Experiments on SVM model
+Model 2: Retrain SVM removing the features of bigram and levenshtein distance
+The main difference between these two features and the rest is that these two depend on a corpus of correct tokens in addition to the token being examined.
+```{r}
+test_input <- c()
+for(i in 1:length(test_input_list)){
+  test_input <- rbind(test_input, test_input_list[[i]])
+}
+# using features excluding bigram and distance
+train_input2 <- train_input[,-c(19,22)]
+test_input2 <- test_input[,-c(19,22)]
+
+# # cross validation
+# cv2 <- perform_cv(train_input2, train_labels)
+# best_sigma <- cv2$best_sigma
+# train svm
+time_trainsvm2 <- system.time(fit_svm2 <- ksvm(x = train_input2, y = as.factor(train_labels), type = "C-svc", kernel = "rbfdot", kpar =list(sigma = best_sigma)))
+# predict on test data
+time_predict2 <- system.time(preds2 <- as.logical(predict(fit_svm2, test_input2)))
+#error matrix
+m2 <- table(preds2, test_labels)/length(preds2)
+error_precision[[2]] <-m2[1,1]/sum(m2[1,])
+error_recall[[2]] <- m2[1,1]/sum(m2[,1])
+accuracy[[2]] <- m2[1,1]+m2[2,2]
+cat("error matrix: \n")
+m2
+cat("error precision = ", error_precision[[2]], "\n")
+cat("error recall = ", error_recall[[2]], "\n")
+cat("overall accuracy = ", accuracy[[2]], "\n")
+ 
+```
+We can see that after removing the features of bigram and distance features, the recall is still ok. But the recall for errors and overall accuracy is hardly better than a random classifier for error. The classifier classified many nonerrors as errors - too many false positives.
+
+Model 3: Retrain SVM removing only the bigram feature
+```{r}
+# using features excluding bigram, (adding distance feature compared to model 2)
+train_input3 <- train_input[,-19]
+test_input3 <- test_input[,-19]
+
+# # cross validation
+# cv3 <- perform_cv(train_input3, train_labels)
+# best_sigma <- cv3$best_sigma
+# train svm
+time_trainsvm3 <- system.time(fit_svm3 <- ksvm(x = train_input3, y = as.factor(train_labels), type = "C-svc", kernel = "rbfdot", kpar =list(sigma = best_sigma)))
+#predict on test data
+time_predict3 <- system.time(preds3 <- as.logical(predict(fit_svm3, test_input3)))
+m3 <- table(preds3, test_labels)/length(preds3)
+error_precision[[3]] <-m3[1,1]/sum(m3[1,])
+error_recall[[3]] <- m3[1,1]/sum(m3[,1])
+accuracy[[3]] <- m3[1,1]+m3[2,2]
+cat("error matrix: \n")
+m3
+cat("error precision = ", error_precision[[3]], "\n")
+cat("error recall = ", error_recall[[3]], "\n")
+cat("overall accuracy = ", accuracy[[3]], "\n")
+```
+
+<!-- levenshtein distance has significantly enhanced the precision and recall for detection for error, the result is similar to that of using all features. We skipped the p parameter (pattern) in this feature in the paper as it is difficult to retrieve the original 140 pattern set used by the authors; what's more, their pattern list is for the rules of rewritting historical German words, which is totally diffirent from modern English that we are focusing on. The built-in function levenshtein.distance in the "vwr" package is easy to use. -->
+
+<!-- removing bigram is even better? some features such as bigram is distracting, maybe need model selection? -->
+Compared with the full model, the recall and precision for error after removing bigram almost remain the same. Compared with the model without bigram and distance, we can see that the distance feature is the major contributor to the increase of precison, because a correct word will have a levenshtein distance of zero to itself leading to more correct tokens classified correctly. While the features that only depend on the token itself will don't provide information whether it is a real word.
+
+Model 4. Retrain SVM removing only the distance feature
+```{r}
+# using features excluding distance, (adding bigram feature compared to model 2)
+train_input4 <- train_input[,-22]
+test_input4 <- test_input[,-22]
+
+# # cross validation
+# cv4 <- perform_cv(train_input3, train_labels)
+# best_sigma <- cv4$best_sigma
+# train svm
+time_trainsvm4 <- system.time(fit_svm4 <- ksvm(x = train_input4, y = as.factor(train_labels), type = "C-svc", kernel = "rbfdot", kpar =list(sigma = best_sigma)))
+time_predict4 <- system.time(preds4 <- as.logical(predict(fit_svm4, test_input4)))
+m4 <- table(preds4, test_labels)/length(preds4)
+error_precision[[4]] <-m4[1,1]/sum(m4[1,])
+error_recall[[4]] <- m4[1,1]/sum(m4[,1])
+accuracy[[4]] <- m4[1,1]+m4[2,2]
+cat("error matrix: \n")
+m4
+cat("error precision = ", error_precision[[4]], "\n")
+cat("error recall = ", error_recall[[4]], "\n")
+cat("overall accuracy = ", accuracy[[4]], "\n")
+```
+Compared with model 2, we can see that the bigram feature has some contribution to precision, but not as much as the distance feature. We consider these two features have similar properties. If we can pre-select the most important features we can definitely save time for extracting featrues as well as time for training and testing. For improvement of performance, a more complete model selection is needed.
+
+It seems that the distance feature is contributing the most, however, it also has a high computational cost, mainly because we are calculating not only the distances of the current token to one in the ground truth tokens in the training set, we also add a lexicon of "english.words" in the "vwr" package, because the training data set has a limited vocabulary, it is highly likely that a token in the test set cannot find a similar word in the training set. This consideration is consistent with the usage of a German lexicon in the paper. We not only use the english.words but also add the training ground truth in the lexicon because ground truth contains many numbers and symbols not included in "english.words". - The lexicon for computing levenshtein distance should be as complete as possible. However, including other symbols (e.g. all numbers) than these two sets would require unlimited amount of work and computational cost. Here we try extracting the all the features except the levenshtein distance and compare the time.
+
+```{r check computational cost of extracting distance feature}
+time_extract_train4 <- system.time(train_input_unique4 <-matrix(unlist(lapply(train_tokens_unique,extract_feature, train_truth_bigrams, train_truth_unique, include_dist = FALSE)), byrow = TRUE, nrow = length(train_tokens_unique)))
+cat("The time for feature extraction including leveshtein distance is: ", time_extract_train, "\n")
+cat("The time for feature extraction excluding leveshtein distance is: ", time_extract_train4, "\n")
+```
+Without the distance feature, the time for feature extraction is less than half the original time!
+
+### Step 5.1.4 Summary on SVM model performance on OCR error detection 
+To sum up, the SVM model in the paper has a noticeable precision and recall, far better than a random classifier, with the feature of levenshtein distance contributing most to the recall and most of the others contributing to the precision. However, if this model is to be used for OCR detection, it has several potential problems:
+
+1.Lack of features depending on context (from step 5.1.2 evaluation in details)
+
+2.Redundancy of potentially useless features - need model selection for the particular OCR post-processing tast (from step 5.1.3 experiments)
+
+3.High computational cost for feature extraction, especially Levenshtein Distance (from step 5.1.3 experiments)
+
+4.Trade-off for overall computational cost and prediction accuracy - suggestion: adding a feature indicating the frequency of a token in each class in the training set (from step 3.2.1 train data preparation)
+
+
+###################################################################################################
 
 The two most common OCR accuracy measures are precision and recall. Both are relative measures of the OCR accuracy because they are computed as ratios of the correct output to the total output (precision) or input (recall). More formally defined,
 \begin{align*}
