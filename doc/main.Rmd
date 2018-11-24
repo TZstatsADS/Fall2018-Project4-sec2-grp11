@@ -293,12 +293,15 @@ time_predict <- system.time(
 
 <!-- variables for to be used for correction only - to evaluate overall detection and correction performance -->
 <!-- preds_list -->
-<!-- test_input_list -->
+<!-- test_tokens_list -->
 
 
 <!-- C-4 potential problems -->
 <!-- 1.not considering split or merge of tokens -->
-<!-- 2.not considering confusion between letters and other symbols (e.g. numbers) see above examples -->
+<!-- 2.not considering confusion between letters and other symbols (e.g. numbers) see above examples-->
+<!-- 3.confusion matrix is not specifically for OCR errors (such as "I" and "l") -->
+<!-- 4.only considering 1 misoperation, but not multiple in one token, i.e. only 1 deletion/insertion/substitution and reversion -->
+<!-- 5.the mentioned operations are for typos, not common for OCR. OCR seldom has insertion or reversion of charcters. -->
 
 Given the detected word error, in order to find the best correction, we need to generate the candidate corrections: a dictionary or a database of legal n-grams to locate one or more potential correction terms. Then we need invoke some lexical-similarity measure between the misspelled string and the candidates or a probabilistic estimate of the likelihood of the correction to rank order the candidates.
 
