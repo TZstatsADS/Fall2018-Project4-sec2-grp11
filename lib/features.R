@@ -1,14 +1,18 @@
+stringsplit_1st <- function(line){
+  return(strsplit(line, " ")[[1]])
+}
+
 cut_bigram <- function(start_pos, token){
   return(substr(token, start = start_pos, stop = start_pos+1))
 }
 
 bigram_from_token <- function(input_string){
   nb <- nchar(input_string)-1
-  if(nb>0){
+  if(nb >= 2){
     bigram <- lapply(1:nb, cut_bigram, input_string)
   }
   else{
-    bigram <- NULL
+    bigram <- input_string
   }
   return(bigram)
 }
@@ -17,7 +21,7 @@ bigram_freq<-function(bigram, all_bigrams){
   return(sum(all_bigrams == bigram))
 }
 
-extract_feature <- function(cur_token, all_correct_bigrams, truth_set){
+extract_feature <- function(cur_token, all_correct_bigrams, truth_set, include_dist = TRUE){
   
   feature_list <- rep(list(NULL),13)
   
@@ -30,7 +34,7 @@ extract_feature <- function(cur_token, all_correct_bigrams, truth_set){
   consonants <- '[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]'
   v <- str_count(cur_token, pattern = vowels)
   c <- str_count(cur_token, pattern = consonants)
-  feature_list[[2]] <- c(v,c,v/l,c/l,ifelse(c>0,v/c,-1))
+  feature_list[[2]] <- c(v,c,v/l,c/l,ifelse(c>0,v/c,100))
   
   #feature 3
   s <- str_count(cur_token, pattern = '[^[:alnum:]]')
@@ -104,24 +108,17 @@ extract_feature <- function(cur_token, all_correct_bigrams, truth_set){
   feature_list[[9]] <- f9
   
   #feature 10 bigram
-  # N<-length(all_correct_tokens)
-  if(l==1){
-    bigr <- -1
-  }
-  else{
-    cur_bigrams <- bigram_from_token(tolower(cur_token))
+  cur_bigrams <- bigram_from_token(tolower(cur_token))
   
   bf <- unlist(lapply(cur_bigrams, bigram_freq, all_correct_bigrams))
   n <- length(cur_bigrams)
-  bigr <- sum(bf)/n/10000
+  if (n == 1){
+    if(nchar(cur_bigrams)==1) n <- 0.5
   }
-  
-  # bf <- rep(0,n)
-  # for(i in 1:n){
-  #     bf[i]<- sum(all_correct_bigrams == cur_bigrams[i])
-  # }
+  bigr <- sum(bf)/n/10000
   
   feature_list[[10]] <- bigr
+
   
   #feature 11
   symbol_list <- list()
@@ -140,12 +137,23 @@ extract_feature <- function(cur_token, all_correct_bigrams, truth_set){
   #feature 12
   l1 <- str_count(cur_token, pattern = '[:alpha:]')
   l2 <- l - l1
-  feature_list[[12]] <- ifelse(l1>0, l2/l1, -1)
+  feature_list[[12]] <- ifelse(l1>0, l2/l1, 100)
   
   #feature 13 leveshtein distance
-  nv <- min(levenshtein.distance(tolower(cur_token), c(english.words, truth_set)))
-  feature_list[[13]] <-(nv+1)/l
+  if(include_dist){
+    nv <- min(levenshtein.distance(tolower(cur_token), c(english.words, truth_set)))
+  feature_list[[13]] <- (nv+1)/l
   
+  }
   ft = unlist(feature_list)
   return(ft)
+}
+
+token_to_input_format <- function(vec, all_correct_bigrams, truth_set){
+  input_format <- matrix(unlist(lapply(vec,extract_feature,all_correct_bigrams,truth_set)), byrow = TRUE, nrow = length(vec))
+  return(input_format)
+}
+
+get_line_input <- function(token, input_matrix){
+  return(input_matrix[which(rownames(input_matrix) == token),])
 }
