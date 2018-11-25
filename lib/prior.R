@@ -1,7 +1,7 @@
 # Pr(c)
 #freq(c)
 ################################################
-#use train_truth_unique to make deletion tables
+
 ################################################
 del_char <- function(pos, token){
   nc <- nchar(token)
