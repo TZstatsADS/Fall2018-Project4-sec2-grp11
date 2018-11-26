@@ -4,19 +4,48 @@ doc_match <- function(tesseract_doc, truth_doc){
   l_truth <- length(truth_doc)
   
   doc_clean_ind_list <- list()
+  errors_list <- list()
   line_diff <- 0
   if(l_tess == l_truth){
     for (i in 1:l_tess){
-      line_clean_ind <- ifelse(tesseract_doc[[i]] %in% truth_doc[[i]],TRUE,FALSE)
-      doc_clean_ind_list[[i]] <- line_clean_ind
+      doc_clean_ind_list[[i]] <- ifelse(tesseract_doc[[i]] %in% truth_doc[[i]],TRUE,FALSE)
+      errors_list[[i]] <- tesseract_doc[[i]][!tesseract_doc[[i]] %in% truth_doc[[i]]]
     }
   }
   else{
     line_diff <- l_tess - l_truth
     for (i in 1:l_tess){
-      line_clean_ind <- ifelse(tesseract_doc[[i]] %in% unlist(truth_doc[i:(i+abs(line_diff))]),TRUE,FALSE)
-      doc_clean_ind_list[[i]] <- line_clean_ind
+      doc_clean_ind_list[[i]] <- ifelse(tesseract_doc[[i]] %in% unlist(truth_doc[i:(i+abs(line_diff))]),TRUE,FALSE)
+      errors_list[[i]] <- tesseract_doc[[i]][!tesseract_doc[[i]] %in% unlist(truth_doc[i:(i+abs(line_diff))])]
     }
   }
-  return(list("doc_clean_ind" = doc_clean_ind_list, "line_diff" = line_diff))
+  return(list("doc_clean_ind_list" = doc_clean_ind_list, "line_diff" = line_diff, "errors_list" = errors_list))
+}
+
+char_match <- function(tesseract_doc, truth_doc){
+  # l_tess <- length(tesseract_doc)
+  # l_truth <- length(truth_doc)
+  
+  tesseract_one_vec <- paste(unlist(tesseract_doc), collapse = " ")
+  truth_one_vec <- paste(unlist(truth_doc), collapse = " ")
+  tesseract_nchar <- nchar(tesseract_one_vec)
+  truth_nchar <- nchar(truth_one_vec)
+  
+  crct_nchar <- 0
+  # errors_list <- list()
+  # if(l_tess == l_truth){
+  #   for (i in 1:l_tess){
+  #     current_tesseract_line <- paste(tesseract_doc[[i]], collapse = " ")
+  #     current_line_nchar <- nchar(current_tesseract_line)
+  #     current_truth_line <- paste(truth_doc[[i]], collapse = " ")
+  #     current_line_nchar_error <- levenshtein.distance(current_tesseract_line, current_truth_line)
+  #     crct_nchar <- current_line_nchar - current_line_nchar_error + crct_nchar
+  #   }
+  # }
+  # else{
+    doc_nchar_error <- levenshtein.distance(tesseract_one_vec, truth_one_vec)
+    crct_nchar <- tesseract_nchar - doc_nchar_error
+  # }
+    names(crct_nchar) <- NULL
+  return(list("nchar_correct_OCR" = crct_nchar, "nchar_tesseract" = tesseract_nchar, "nchar_truth" = truth_nchar))
 }
