@@ -23,29 +23,29 @@ doc_match <- function(tesseract_doc, truth_doc){
 }
 
 char_match <- function(tesseract_doc, truth_doc){
-  # l_tess <- length(tesseract_doc)
-  # l_truth <- length(truth_doc)
+  l_tess <- length(tesseract_doc)
+  l_truth <- length(truth_doc)
   
   tesseract_one_vec <- paste(unlist(tesseract_doc), collapse = " ")
   truth_one_vec <- paste(unlist(truth_doc), collapse = " ")
-  tesseract_nchar <- nchar(tesseract_one_vec)
-  truth_nchar <- nchar(truth_one_vec)
+  tesseract_nchar <- nchar(tesseract_one_vec) - (l_tess - 1)
+  truth_nchar <- nchar(truth_one_vec) - (l_truth - 1)
   
   crct_nchar <- 0
-  # errors_list <- list()
-  # if(l_tess == l_truth){
-  #   for (i in 1:l_tess){
-  #     current_tesseract_line <- paste(tesseract_doc[[i]], collapse = " ")
-  #     current_line_nchar <- nchar(current_tesseract_line)
-  #     current_truth_line <- paste(truth_doc[[i]], collapse = " ")
-  #     current_line_nchar_error <- levenshtein.distance(current_tesseract_line, current_truth_line)
-  #     crct_nchar <- current_line_nchar - current_line_nchar_error + crct_nchar
-  #   }
-  # }
-  # else{
+  if(l_tess == l_truth){
+    for (i in 1:l_tess){
+      current_tesseract_line <- paste(tesseract_doc[[i]], collapse = " ")
+      current_tesseract_line_nchar <- nchar(current_tesseract_line)
+      current_truth_line <- paste(truth_doc[[i]], collapse = " ")
+      current_truth_line_nchar <- nchar(current_truth_line)
+      current_line_nchar_error <- levenshtein.distance(current_tesseract_line, current_truth_line)
+      crct_nchar <- crct_nchar + (current_tesseract_line_nchar - current_line_nchar_error)
+    }
+  }
+  else{
     doc_nchar_error <- levenshtein.distance(tesseract_one_vec, truth_one_vec)
     crct_nchar <- tesseract_nchar - doc_nchar_error
-  # }
+  }
     names(crct_nchar) <- NULL
-  return(list("nchar_correct_OCR" = crct_nchar, "nchar_tesseract" = tesseract_nchar, "nchar_truth" = truth_nchar))
+  return(list("nchar_correct_OCR" = crct_nchar, "nchar_tesseract" = tesseract_nchar, "nchar_truth" = truth_nchar, "nline_tess" = l_tess))
 }
