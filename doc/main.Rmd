@@ -57,7 +57,7 @@ In this project, we are going to **focus on the third stage -- post-processing**
 # Step 1 - Load library and source code
 ```{r, warning=FALSE, message = FALSE}
 # setwd("F:/huihui/ADS/proj4/Fall2018-Project4-sec2--sec2proj4_grp11-master/doc")
-packages.used <- c("devtools","vwr","kernlab")
+packages.used <- c("devtools","vwr","kernlab", "rlist")
 # check packages that need to be installed.
 packages.needed=setdiff(packages.used,intersect(installed.packages()[,1], packages.used))
 # install additional packages
@@ -71,12 +71,16 @@ if (!require("pacman")) {
 }
 library(vwr)
 library(kernlab)
+library(rlist)
 
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
 source('../lib/document_match.R')
+source('../lib/match_correction.R')
 source('../lib/features.R')
 source('../lib/svm_cross_validation.R')
 source('../lib/test_result.R')
+source('../lib/perform_correction.R')
+source('../lib/rebuild_lines.R')
 file_name_vec <- list.files("../data/ground_truth") #100 files in total
 ```
 
@@ -91,7 +95,7 @@ Probabilistic techniques -- [SVM garbage detection](https://dl.acm.org/citation.
 - features are in section 5 (you can choose not to implement ‘Levenshtein distance’ feature)
 
 ## Step 3.1 - Data preperation
-First, we do the data preparation for all 100 tesseract files, to label all the tokens as nonerror or error, using line-by-line comparison.
+First, we do the data preparation for all 100 tesseract files, to label all the tokens as nonerror or error, using line-by-line comparison, and use the tokens in the line of interest in the ground truth as a dictionary to check if the current tesseract token is an error.
 ```{r prepare data from all 100 files for both classes}
 ## initialze variables
 line_diff <- rep(NA, 100)
@@ -104,6 +108,9 @@ nonerror_list <- list()
 clean_ind_list <- list()
 tokens_per_line_list <- list()
 truth_tokens_per_line_list <- list()
+#for corrections
+error_list_vec <- list()
+corrections_list_vec <- list()
 
 for (i in 1:100){
   current_file_name <- sub(".txt","",file_name_vec[i])
@@ -114,31 +121,30 @@ for (i in 1:100){
   current_ground_truth_list_vec <- lapply(current_ground_truth_txt, stringsplit_1st)
   ground_truth_list_vec[[i]] <- current_ground_truth_list_vec
   # count the number of tokens in each line for the current file, make a list for all 100 files
-  truth_tokens_per_line <- unlist(lapply(current_ground_truth_list_vec, length))
-  truth_tokens_per_line_list[[i]] <- truth_tokens_per_line
+  truth_tokens_per_line_list[[i]]  <- unlist(lapply(current_ground_truth_list_vec, length))
   # create a vector including all the tokens in the current file, make a list for all 100 files
-  current_ground_truth_vec <- unlist(current_ground_truth_list_vec)
-  ground_truth_list[[i]] <- current_ground_truth_vec
+  ground_truth_list[[i]] <- unlist(current_ground_truth_list_vec)
 
   ## read the tesseract text :procedure similar to the ground truth files
   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
   current_tesseract_list_vec <- lapply(current_tesseract_txt, stringsplit_1st)
-  tesseract_list_vec[[i]] <- current_tesseract_list_vec
-  tokens_per_line <- unlist(lapply(current_tesseract_list_vec, length))
-  tokens_per_line_list[[i]] <- tokens_per_line
   current_tesseract_vec <- unlist(current_tesseract_list_vec)
-  tesseract_list[[i]] <- current_tesseract_vec 
+  tesseract_list_vec[[i]] <- current_tesseract_list_vec
+  
+  tokens_per_line_list[[i]] <- unlist(lapply(current_tesseract_list_vec, length))
+  tesseract_list[[i]]<- unlist(current_tesseract_list_vec)
   
   ## compare tesseract text and ground truth, basically line by line match, see details below
   match_result <- doc_match(current_tesseract_list_vec, current_ground_truth_list_vec)
-  # get the token-clean indicators for each line
-  current_clean_ind_list <- match_result[[1]]
-  # combine the result for each line into one vector for one file, and make a list for all 100 files
-  current_clean_ind <- unlist(current_clean_ind_list)
+  current_clean_ind <- unlist(match_result[[1]])
   clean_ind_list[[i]] <- current_clean_ind
   # get the result for any diffences in number of lines between the tesseract file and the ground truth
   line_diff[i] <- match_result[[2]]
-
+  error_list_vec[[i]] <- match_result[[3]]
+  
+  #for correction use
+  corrections_list_vec[[i]] <- match_correct(current_tesseract_list_vec, current_ground_truth_list_vec)
+    
   # get a vector of errors for the current tesseract file and make a list for all 100 files
   error_list[[i]] <-current_tesseract_vec[!current_clean_ind]
   # similarly for nonerrors
@@ -149,6 +155,8 @@ for (i in 1:100){
 truth_mean_tokens_per_line <- mean(unlist(lapply(truth_tokens_per_line_list, mean)))
 #do the same for tesseract
 tesseract_mean_tokens_per_line <- mean(unlist(lapply(tokens_per_line_list, mean)))
+
+
 ```
 The probability is very small for the same token appearing in the same line both as error and as nonerror , at least smaller than that probability in the same document, so we compare each line instead of each document - token-wise comparisons will be harder as there are split and merge of tokens during OCR.
 ```{r file example}
@@ -297,11 +305,13 @@ time_predict <- system.time(
 
 
 <!-- C-4 potential problems -->
+<!-- The paper was for correctin typos - errors from the keyboard of a typist, not for OCR -->
 <!-- 1.not considering split or merge of tokens -->
 <!-- 2.not considering confusion between letters and other symbols (e.g. numbers) see above examples-->
 <!-- 3.confusion matrix is not specifically for OCR errors (such as "I" and "l") -->
 <!-- 4.only considering 1 misoperation, but not multiple in one token, i.e. only 1 deletion/insertion/substitution and reversion -->
 <!-- 5.the mentioned operations are for typos, not common for OCR. OCR seldom has insertion or reversion of charcters. -->
+<!-- 6. context problem: don't know if the previous/following word belongs to another paragraph - can be misleading! -->
 
 Given the detected word error, in order to find the best correction, we need to generate the candidate corrections: a dictionary or a database of legal n-grams to locate one or more potential correction terms. Then we need invoke some lexical-similarity measure between the misspelled string and the candidates or a probabilistic estimate of the likelihood of the correction to rank order the candidates.
 
@@ -310,6 +320,179 @@ The referenced paper is:
 4. [probability scoring with contextual constraints](https://link.springer.com/content/pdf/10.1007%2FBF01889984.pdf)
 
 - focus on section 5
+
+## Step 4.1 Correction data preparation
+```{r}
+# # may be put into 3.1
+# corrections_list_vec <- list()
+# for (i in 1:100){
+#   current_file_name <- sub(".txt","",file_name_vec[i])
+# 
+#   ## read the ground truth text
+#   current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,".txt",sep=""), warn=FALSE)
+#   # for the current file, construct lists of vectors, each list representing one line, make a list for 100 files
+#   current_ground_truth_list_vec <- lapply(current_ground_truth_txt, stringsplit_1st)
+# 
+#   ## read the tesseract text :procedure similar to the ground truth files
+#   current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,".txt",sep=""), warn=FALSE)
+#   current_tesseract_list_vec <- lapply(current_tesseract_txt, stringsplit_1st)
+#   current_correction_list <- match_correct(current_tesseract_list_vec, current_ground_truth_list_vec)
+#   corrections_list_vec[[i]] <- current_correction_list
+# }
+# 
+# #try matching error_list_vec with corrections_list_vec? or just use those corrections?
+```
+
+```{r}
+#Pure correciton using real errors
+test_corrected_list_vec <- list()
+test_error_list_vec <- error_list_vec[test_file_id]
+test_corrections_list_vec <- corrections_list_vec[test_file_id]
+for (i in 1:20){
+  test_corrected_list_vec[[i]] <- lapply(test_error_list_vec[[i]], do_correction_on_vec)
+}
+#evaluation using test_corrections_list_vec & test_corrected_list_vec
+#word level
+num_corrected <- rep(0, 20)
+for(i in 1:20){
+  num_corrected[i] <- sum(unlist(doc_match(test_corrected_list_vec[[i]], test_corrections_list_vec[[i]])))
+}
+total_corrected <- sum(num_corrected)
+
+
+# # #correction after detection from svm
+# test_tokens_list_vec <- tesseract_list_vec[test_file_id]
+# test_tokens_per_line_list <- tokens_per_line_list[test_file_id]
+# preds_list_vec <- list()
+# for(i in 1:20){
+#   doc_line_lens <- test_tokens_per_line_list[[i]] # a vector: e.g. 5 7 9 ...
+#   doc_lines <- length(doc_line_lens) #number of lines in the current doc
+#   doc_preds <- preds_list[[i]]# the svm preds vector for the current doc
+#   preds_list_vec[[i]] <- list()
+#   for(j in 1:doc_lines){
+#     current_line_preds <- doc_preds[1:doc_line_lens[j]] # get the preds for the current line
+#     doc_preds <- doc_preds[(doc_line_lens[j]+1):length(doc_preds)] # delete the preds for the current line
+#     preds_list_vec[[i]] <- list.append(preds_list_vec[[i]], current_line_preds)
+#   }
+# }
+# 
+# predicted_error_list_vec <- list()
+# for (i in 1:20){
+#   current_file_tokens_list <- test_tokens_list_vec[[i]]
+#   current_file_preds_list <- preds_list_vec[[i]]
+#   l = length(current_file_tokens_list)
+#   predicted_error_list_vec[[i]] <- list()
+#   for(j in 1:l){
+#     predicted_error_list_vec[[i]] <- list.append(predicted_error_list_vec[[i]], current_file_tokens_list[[j]][!current_file_preds_list[[j]]])
+#   }
+# }
+# svm_corrected_list_vec <- list()
+# for (i in 1:20){
+#   svm_corrected_list_vec[[i]] <- lapply(predicted_error_list_vec[[i]], do_correction_on_vec)
+# }
+# 
+
+
+# # <!-- preds_list -->
+# # <!-- test_tokens_list -->
+# #tokens_per_line_list
+# test_tokens_list_vec <- tesseract_list_vec[test_file_id]
+# test_tokens_per_line_list <- tokens_per_line_list[test_file_id]
+# preds_list_vec <- list()
+# for(i in 1:20){
+#   doc_line_lens <- test_tokens_per_line_list[[i]] # a vector: e.g. 5 7 9 ...
+#   doc_lines <- length(doc_line_lens) #number of lines in the current doc
+#   doc_preds <- preds_list[[i]]# the svm preds vector for the current doc
+#   preds_list_vec[[i]] <- list()
+#   for(j in 1:doc_lines){
+#     current_line_preds <- doc_preds[1:doc_line_lens[j]] # get the preds for the current line
+#     doc_preds <- doc_preds[(doc_line_lens[j]+1):length(doc_preds)] # delete the preds for the current line
+#     preds_list_vec[[i]] <- list.append(preds_list_vec[[i]], current_line_preds)
+#   }
+# }
+# predicted_error_list_vec <- list()
+# for (i in 1:20){
+#   current_file_tokens_list <- test_tokens_list_vec[[i]] 
+#   current_file_preds_list <- preds_list_vec[[i]]
+#   l = length(current_file_tokens_list)
+#   predicted_error_list_vec[[i]] <- list()
+#   for(j in 1:l){
+#     predicted_error_list_vec[[i]] <- list.append(predicted_error_list_vec[[i]], current_file_tokens_list[[j]][!current_file_preds_list[[j]]])
+#   }
+# }
+# svm_corrected_list_vec <- list()
+# for (i in 1:20){
+#   svm_corrected_list_vec[[i]] <- lapply(predicted_error_list_vec[[i]], do_correction_on_vec)
+# }
+# 
+# #evaluation using test_corrections_list_vec & svm_corrected_list_vec
+# #???
+
+```
+
+```{r}
+
+#precision recall using 
+total_original_nonerror <- length(unlist(nonerror_list[test_file_id])) #old precision/recall numerator
+precision_denom <- length(unlist(tesseract_list[test_file_id]))
+recall_denom <- length(unlist(ground_truth_list[test_file_id]))
+# 
+
+test_clean_ind_list <- clean_ind_list[test_file_id]
+test_tokens_per_line_list <- tokens_per_line_list[test_file_id]
+test_ground_truth_list_vec <- ground_truth_list_vec[test_file_id]
+#for context correction
+#correction only evaluation
+#test_tokens_list & test_clean_ind_list
+test_corrected_list <- list()
+for(i in 1:20){
+  test_corrected_list[[i]] <- do_correction_on_vec(test_tokens_list[[i]], test_clean_ind_list[[i]])
+}
+
+test_corrected_list_vec <- list()
+for(i in 1:20){
+  test_corrected_list_vec[[i]] <- rebuild_lines(test_corrected_list[[i]], test_tokens_per_line_list[[i]])
+}
+# temp <- rebuild_lines(test_tokens_list[[1]], test_tokens_per_line_list[[1]])
+test_right_ind_list <- list()
+for(i in 1:20){
+  test_right_ind_list[[i]] <- doc_match(test_corrected_list_vec[[i]], test_ground_truth_list_vec[[i]])[[1]]
+}
+
+# # new precision/recall numerator
+total_test_right <- sum(unlist(test_right_ind_list)) # number of corrected items after correction only
+# #precision recall using 
+# total_original_nonerror <- length(unlist(nonerror_list[test_file_id])) #old precision/recall numerator
+
+# precision_denom <- length(unlist(tesseract_list[test_file_id]))
+# recall_denom <- length(unlist(ground_truth_list[test_file_id]))
+###################
+#overall evaluation
+#test_tokens_list & preds_list
+svm_corrected_list <- list()
+for(i in 1:20){
+  svm_corrected_list[[i]] <- do_correction_on_vec(test_tokens_list[[i]], preds_list[[i]])
+}
+
+svm_corrected_list_vec <- list()
+for(i in 1:20){
+  svm_corrected_list_vec[[i]] <- rebuild_lines(svm_corrected_list[[i]], test_tokens_per_line_list[[i]])
+}
+
+svmed_right_ind_list <- list()
+for(i in 1:20){
+  svmed_right_ind_list[[i]] <- doc_match(svm_corrected_list_vec[[i]], test_ground_truth_list_vec[[i]])[[1]]
+}
+
+# # new precision/recall numerator
+total_svmed_right <- sum(unlist(svmed_right_ind_list)) # number of corrected items after svm detection and correction
+
+```
+
+```{r}
+#character accuracy
+# including space
+```
 
 # Step 5 - Performance measure
 
@@ -486,7 +669,7 @@ To sum up, the SVM model in the paper has a noticeable precision and recall, far
 
 
 ###################################################################################################
-
+## Step 5.2 Correction performance measure
 The two most common OCR accuracy measures are precision and recall. Both are relative measures of the OCR accuracy because they are computed as ratios of the correct output to the total output (precision) or input (recall). More formally defined,
 \begin{align*}
 \mbox{precision}&=\frac{\mbox{number of correct items}}{\mbox{number of items in OCR output}}\\
