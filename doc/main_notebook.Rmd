@@ -1,0 +1,392 @@
+---
+title: 'Optical character recognition (OCR)'
+output: 
+  html_notebook:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    number_sections: true
+    code_folding: hide
+---
+Group 11
+
+GU4243/GR5243: Applied Data Science
+
+<style type="text/css">
+h1.title {
+font-size: 24px;
+color: Black;
+}
+h1 { /* Header 1 */
+font-size: 24px;
+color: Black;
+}
+h2 { /* Header 2 */
+font-size: 20px;
+color: Black;
+}
+h3 { /* Header 3 */
+font-size: 16px;
+color: Black;
+}
+h4 { /* Header 4 */
+font-size: 14px;
+color: Grey;
+}
+</style>
+# Introduction {-}
+
+Optical character recognition (OCR) is the process of converting scanned images of machine printed or
+handwritten text (numerals, letters, and symbols), into machine readable character streams, plain (e.g. text files) or formatted (e.g. HTML files). As shown in Figure 1, the data *workflow* in a typical OCR system consists of three major stages:
+
+* Pre-processing
+
+* OCR character recognition
+
+* Post-processing
+
+![](../figs/ocr_flowchart.png) 
+
+We have processed raw scanned images through the first two steps are relying on the [Tessearct OCR machine](https://en.wikipedia.org/wiki/Tesseract_(software)). R package tutorial can be found [here](https://www.r-bloggers.com/the-new-tesseract-package-high-quality-ocr-in-r/). In this project, we are going to **focus on the third stage -- post-processing**, which includes two tasks: *error detection* and *error correction*.  
+
+# Step 1 - Load library and source code
+```{r load lib, warning=FALSE, message = FALSE}
+packages.used <- c("devtools","vwr","kernlab", "rlist", "utils")
+# check packages that need to be installed.
+packages.needed <- setdiff(packages.used, intersect(installed.packages()[,1], packages.used))
+# install additional packages
+if(length(packages.needed)>0) { install.packages(packages.needed, dependencies = TRUE) }
+if (!require("pacman")) {
+  library(devtools)
+  install_github("trinker/pacman")
+}
+library(vwr)
+library(kernlab)
+library(rlist)
+library(utils)
+pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
+
+source('../lib/document_match.R')
+source('../lib/match_correction.R')
+source('../lib/features.R')
+source('../lib/svm_cross_validation.R')
+source('../lib/test_result.R')
+source('../lib/perform_correction.R')
+source('../lib/rebuild_lines.R')
+file_name_vec <- list.files("../data/ground_truth") #100 files in total
+```
+
+# Step 2 - read the files and conduct Tesseract OCR
+
+# Step 3 - Error detection
+
+Now, we are ready to conduct post-processing, based on the Tessearct OCR output. First of all, we need to detect errors, or *incorrectly processed words*.
+
+The referenced paper is:
+Probabilistic techniques -- [SVM garbage detection](https://dl.acm.org/citation.cfm?doid=2034617.2034626)
+
+## Step 3.1 - Data preperation
+
+First, we prepare the data based on all 100 tesseract files. We label all the tokens as non-error or error through line-by-line comparison, and use the tokens in the line of interest in the ground truth files as a dictionary to check if the current tesseract token is an error.
+
+```{r data preparation}
+# initialze variables
+line_diff <- rep(NA, 100)
+ground_truth_list <- list(); ground_truth_list_vec <- list()
+tesseract_list <- list(); tesseract_list_vec <- list()
+tokens_per_line_list <- list(); truth_tokens_per_line_list <- list()
+error_list <- list(); nonerror_list <- list()
+clean_ind_list <- list()
+# for corrections
+error_list_vec <- list(); corrections_list_vec <- list()
+
+for (i in c(1:length(file_name_vec))) {
+  current_file_name <- file_name_vec[i]
+  ## read the ground truth text
+  current_ground_truth_txt <- readLines(paste("../data/ground_truth/",current_file_name,sep=""), warn=FALSE)
+  ## for the current file, construct a list of vectors with each element representing one line
+  current_ground_truth_list_vec <- lapply(current_ground_truth_txt, stringsplit_1st)
+  ground_truth_list_vec[[i]] <- current_ground_truth_list_vec
+  ## count the number of tokens in each line
+  truth_tokens_per_line_list[[i]]  <- sapply(current_ground_truth_list_vec, length)
+  ## create a vector including all the tokens in the current file
+  ground_truth_list[[i]] <- unlist(current_ground_truth_list_vec)
+  
+  ## read the tesseract text: procedure similar to the ground truth files
+  current_tesseract_txt <- readLines(paste("../data/tesseract/",current_file_name,sep=""), warn=FALSE)
+  current_tesseract_list_vec <- lapply(current_tesseract_txt, stringsplit_1st)
+  tesseract_list_vec[[i]] <- current_tesseract_list_vec
+  tokens_per_line_list[[i]] <- sapply(current_tesseract_list_vec, length)
+  current_tesseract_vec <- unlist(current_tesseract_list_vec)
+  tesseract_list[[i]]<- current_tesseract_vec
+  
+  ## compare tesseract text and ground truth, basically matching them line by line
+  match_result <- doc_match(current_tesseract_list_vec, current_ground_truth_list_vec)
+  current_clean_ind <- unlist(match_result[[1]])
+  clean_ind_list[[i]] <- current_clean_ind
+  ## get the diffence in the number of lines between the tesseract file and the ground truth
+  line_diff[i] <- match_result[[2]]
+  error_list_vec[[i]] <- match_result[[3]]
+  ## create a vector of errors and one of non-errors for the current tesseract file
+  error_list[[i]] <- current_tesseract_vec[!current_clean_ind]
+  nonerror_list[[i]] <- current_tesseract_vec[current_clean_ind]
+  
+  ## for correction use
+  corrections_list_vec[[i]] <- match_correct(current_tesseract_list_vec, current_ground_truth_list_vec)
+}
+
+# compute the ground truth mean number of tokens per line
+truth_mean_tokens_per_line <- mean(sapply(truth_tokens_per_line_list, mean))
+# do the same for tesseract
+tesseract_mean_tokens_per_line <- mean(sapply(tokens_per_line_list, mean))
+```
+
+The probability is considerably small for the same token appearing in the same line both as an error and as a non-erroneous word, at least smaller than that probability in the same document, so we compare each line instead of each document - token-wise comparisons will be harder as there are splits and merges of tokens during the OCR process. For example, "improvement" was split into "1mprove" and "ent".
+
+```{r split of tokens example}
+# split of tokens e.g. "improvement" split into "1mprove" and "ent"
+cat("Example of token splitting: \n",
+    "group5_00000012_9.txt 60th line \n",
+    "ground turth: ", ground_truth_list_vec[[100]][[60]], "\n",
+    "tesseract: ", tesseract_list_vec[[100]][[60]], "\n")
+```
+
+13 out of 100 tesseract documents do not have the same number of lines with the corresponding ground truth document, but none of them have more lines than the ground truth (12 have 1 fewer line, 1 has 2 fewer lines than the ground truth).
+
+Thus, when the numbers of lines differ, we match the current line in the tesseract file with the corresponding line as well as the following 1 or 2 lines in the ground truth document, because we do not know which line tessearct omitted (see algorithm in "lib/document_match.R").
+
+```{r}
+cat(" ground truth mean number of tokens per line =", truth_mean_tokens_per_line, "\n",
+    "tesseract mean number of tokens per line =", tesseract_mean_tokens_per_line, "\n",
+    "difference in the number of lines between tesseract and ground truth files: \n", 
+    line_diff[1:25], "\n", line_diff[26:50], "\n", line_diff[51:75], "\n", line_diff[76:100], "\n")
+```
+
+The match will be less precise than line-by-line, but ignorable - we think it will be better than matching in the whole document. For example, in the 100th document, "90" is read by OCR as "an". "an" itself may not be an erroneous word in the document, but it is not correct at that position.
+
+```{r line-by-line example}
+# "90" read as "an"
+cat("Example of a single token as both error and non-error: \"an\" \n",
+    "*** group5_00000012_9.txt 647th line *** \n",
+    "ground turth: ", ground_truth_list_vec[[100]][[647]], "\n",
+    "tesseract: ", tesseract_list_vec[[100]][[647]], "\n",
+    "*** group5_00000012_9.txt 93rd line *** \n",
+    "ground turth: ", ground_truth_list_vec[[100]][[93]], "\n",
+    "tesseract: ", tesseract_list_vec[[100]][[93]], "\n")
+```
+
+## Step 3.2 - Train SVM
+
+### Step 3.2.1 - Training data preparation
+
+We now prepare the training data - the bulk of this part is to extract the 22 features for each token. To reduce overfitting, we select 80 files (proportional in the 5 groups) as training data and the remaining 20 for evaluation. Then, the correct and erroneous tokens in the 80 tesseract files will be our training data for the SVM model. 
+
+We don't use the ground truth as non-error for two reasons: 
+
+1. the 80 files of ground truth have more data, which will increase running time. 
+
+2. using non-error in tesseract files have can reflect the true situations in OCR word recognition.
+
+The computational costs of training the svm model for all tokens in the corpus will increase exponentially. One way to reduce the training time is using each token only once. However, this approach would cause a problem that the frequencies of tokens in each class is not considered, e.g. token "a" appears 3354 times in the correct tokens class. Because we need to retrain svm several times for experiment, we will use every token only once for time-saving purpose.
+
+- Potential improvement: include this frequency information as another feature.
+
+```{r training data preparation, warning=FALSE, message = FALSE}
+unique_in_train <- TRUE
+# group 1 to 5 have 10 (1:10), 28 (11:38), 3 (39:41), 27 (42:68) and 32 (69:100) files respectively
+# select 8, 22, 2, 22, 26 files from each group as the training set
+train_file_id <- c(3:10, 17:38, 40:41, 47:68, 75:100)
+train_error <- unlist(error_list[train_file_id])
+train_nonerror <- unlist(nonerror_list[train_file_id])
+train_truth <- unlist(ground_truth_list[train_file_id])
+train_tokens <- c(train_error, train_nonerror)
+
+# extract features for unique tokens only for time-saving purpose
+train_truth_unique <- unique(train_truth)
+# compile a frequency list of letter bigrams
+train_truth_bigrams <- tolower(unlist(lapply(train_truth, bigram_from_token)))
+train_freq_bigrams <- table(train_truth_bigrams)
+train_tokens_unique <- unique(c(train_error, train_nonerror))
+# load("../output/feature_train.RData")
+time_extract_train <- system.time(
+  train_input_unique <- matrix(sapply(train_tokens_unique, extract_feature, train_freq_bigrams, 
+                                      train_truth_unique), 
+                               byrow = TRUE, nrow = length(train_tokens_unique)))
+rownames(train_input_unique) <- train_tokens_unique
+
+# to improve recall, tokens appearing in both classes are treated as error
+train_labels_unique <- !(train_tokens_unique %in% train_error)
+names(train_labels_unique) <- train_tokens_unique
+
+# construct final training data
+if(unique_in_train) {
+  train_input <- train_input_unique
+  train_labels <- train_labels_unique
+} else {
+  ## repeat each token according to its frequency in the training data as the final training input
+  train_input <- matrix(unlist(lapply(train_tokens, get_line_input, train_input_unique)), 
+                        byrow = TRUE, ncol = ncol(train_input_unique))
+  rownames(train_input) <- train_tokens
+  train_labels <- c(rep(FALSE, length(train_error)), rep(TRUE, length(train_truth)))
+  names(train_labels) <- train_tokens
+}
+
+# save training data
+save(train_input_unique, train_labels_unique, time_extract_train, file="../output/feature_train.RData")
+```
+
+```{r}
+cat("Time for feature extraction =", time_extract_train[3], "s")
+```
+
+
+If a token appears at least once in both classes, it will be classified as an error to improve recall. Since for a certain token, whichever class it's in, its features are exactly the same. A bias toward the ground truth set is more severe than a bias toward the error set, because an undetected error will not get into the correction phase.
+
+```{r number of all tokens VS number of unique tokens}
+cat(" number of all tokens in the training set:", length(train_tokens), "\n",
+    "number of unique tokens in the training set:", length(train_tokens_unique), "\n",
+    "lexical density =", round(length(train_tokens_unique)/length(train_tokens),2), "\n")
+```
+
+### Step 3.2.2 - Cross validation
+
+Here we perform a 5-fold cross validation for the svm model using recall as evaluation metric. The tuning parameter is the bandwidth for the Gaussian kernel (as stated in the paper), sigma.
+
+```{r cross validation}
+set.seed(1)
+K <- 5
+# 5-fold cross validation for tuning the bandwith parameter sigma
+sigmas <- c(0.01, 0.1, 1)
+cv <- perform_cv(train_input, train_labels, sigmas, K)
+save(cv, file="../output/cv_result.RData")
+```
+
+### Step 3.2.3 - Train SVM model
+
+```{r model fitting}
+set.seed(1)
+load("../output/cv_result.RData")
+cv_result <- cv$cv_result
+best_sigma <- cv$best_sigma
+
+time_trainsvm <- (system.time(
+  fit_svm <- ksvm(train_input, as.factor(train_labels), type = "C-svc", kernel = "rbfdot", 
+                  kpar = list(sigma = best_sigma))))
+
+save(fit_svm, time_trainsvm, file="../output/fit_svm.RData")
+```
+
+```{r}
+cat("Time for training model =", time_trainsvm[3], "s")
+```
+
+
+## Step 3.3 - Test SVM
+
+We use the rest 20 tesseract files of tokens as the test data.
+
+```{r test svm}
+test_file_id <- c(1:2, 11:16, 39, 42:46, 69:74)
+preds_list <- list()
+# lists of test tokens
+test_tokens_list <- tesseract_list[test_file_id]
+# labels are logical TRUE/FALSE
+test_labels_list <- clean_ind_list[test_file_id]
+
+# make a list of matrices for the input features instead of collapsing them into one matrix 
+# for future document match on the corrected errors
+time_extract_test <- system.time(
+  test_input_list <- lapply(test_tokens_list, token_to_input_format, train_freq_bigrams, train_truth))
+# perform prediction of the svm model on the test set
+time_predict <- system.time(
+  for(i in 1:length(test_input_list)){
+    preds_list[[i]] <- as.logical(predict(fit_svm, test_input_list[[i]]))
+  }
+)
+```
+
+
+
+
+# Step 5 - Performance measure
+## Step 5.1 Evaluation on detection performance measure
+
+Considering that an undetected error will not get into the correction phase, we evaluate error detection as a recall oriented task, which focus on finding all possible errors. Below is the confusion matrix for error detection.
+
+\begin{align*}
+\mbox{detection recall}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of actual errors}}
+\end{align*}
+
+```{r error matrix}
+preds <- unlist(preds_list)
+test_labels <- unlist(test_labels_list)
+model_detection <- factor(ifelse(preds, "Correct","Error" ), levels = c("Error", "Correct"))
+actual_correctness <- factor(ifelse(test_labels, "Correct","Error" ), levels = c("Error", "Correct"))
+detection_confusion_matrix <- table(actual_correctness,model_detection)
+detection_confusion_matrix_frac <- round(detection_confusion_matrix/length(model_detection),4)
+# error_precision <-list(m[1,1]/sum(m[1,]))
+detection_recall <- detection_confusion_matrix[1,1]/sum(detection_confusion_matrix[1,])
+detection_recall_display <- paste(round(100*detection_recall,2), "%", sep  = "")
+# accuracy <- list(m[1,1]+m[2,2])
+cat("Confusion Matrix for Error detection: \n")
+detection_confusion_matrix_frac
+# cat("error precision = ", error_precision[[1]], "\n")
+cat("detection recall = ", detection_recall_display, "\n")
+# cat("overall accuracy = ", accuracy[[1]], "\n")
+```
+
+
+## Step 5.2 Evaluation on correction performance measure
+The two most common OCR accuracy measures are precision and recall. Both are relative measures of the OCR accuracy because they are computed as ratios of the correct output to the total output (precision) or input (recall). More formally defined,
+\begin{align*}
+\mbox{precision}&=\frac{\mbox{number of correct items}}{\mbox{number of items in OCR output}}\\
+\mbox{recall}&=\frac{\mbox{number of correct items}}{\mbox{number of items in ground truth}}
+\end{align*}
+where *items* refer to either characters or words, and ground truth is the original text stored in the plain text file. 
+
+Both *precision* and *recall* are mathematically convenient measures because their numeric values are some decimal fractions in the range between 0.0 and 1.0, and thus can be written as percentages. For instance, recall is the percentage of words in the original text correctly found by the OCR engine, whereas precision is the percentage of correctly found words with respect to the total word count of the OCR output. Note that in the OCR-related literature, the term OCR accuracy often refers to recall.
+
+Here, we only finished the **word level evaluation** criterions, you are required to complete the **letter-level** part.
+
+```{r}
+ground_truth_vec <- str_split(paste(current_ground_truth_txt, collapse = " ")," ")[[1]] #1078
+old_intersect_vec <- vecsets::vintersect(tolower(ground_truth_vec), tolower(tesseract_vec)) #607
+new_intersect_vec <- vecsets::vintersect(tolower(ground_truth_vec), tolower(tesseract_delete_error_vec)) #600
+
+OCR_performance_table <- data.frame("Tesseract" = rep(NA,4),
+                                    "Tesseract_with_postprocessing" = rep(NA,4))
+row.names(OCR_performance_table) <- c("word_wise_recall","word_wise_precision",
+                                      "character_wise_recall","character_wise_precision")
+OCR_performance_table["word_wise_recall","Tesseract"] <- length(old_intersect_vec)/length(ground_truth_vec)
+OCR_performance_table["word_wise_precision","Tesseract"] <- length(old_intersect_vec)/length(tesseract_vec)
+OCR_performance_table["word_wise_recall","Tesseract_with_postprocessing"] <- length(new_intersect_vec)/length(ground_truth_vec)
+OCR_performance_table["word_wise_precision","Tesseract_with_postprocessing"] <- length(new_intersect_vec)/length(tesseract_delete_error_vec)
+kable(OCR_performance_table, caption="Summary of OCR performance")
+```
+
+<!-- letter/number/space distribution comparison -->
+Besides the above required measurement, you are encouraged the explore more evaluation measurements. Here are some related references:
+
+1. Karpinski, R., Lohani, D., & Belaïd, A. *Metrics for Complete Evaluation of OCR Performance*. [pdf](https://csce.ucmss.com/cr/books/2018/LFS/CSREA2018/IPC3481.pdf)
+
+- section 2.1 Text-to-Text evaluation
+
+2. Mei, J., Islam, A., Wu, Y., Moh'd, A., & Milios, E. E. (2016). *Statistical learning for OCR text correction*. arXiv preprint arXiv:1611.06950. [pdf](https://arxiv.org/pdf/1611.06950.pdf)
+
+- section 5, separate the error detection and correction criterions
+
+3. Belaid, A., & Pierron, L. (2001, December). *Generic approach for OCR performance evaluation*. In Document Recognition and Retrieval IX (Vol. 4670, pp. 203-216). International Society for Optics and Photonics. [pdf](https://members.loria.fr/ABelaid/publis/spie02-belaid-pierron.pdf)
+
+- section 3.2, consider the text alignment
+
+# References {-}
+
+1. Borovikov, E. (2014). *A survey of modern optical character recognition techniques*. arXiv preprint arXiv:1412.4183.[pdf](https://pdfs.semanticscholar.org/79c9/cc90b8c2e2c9c54c3862935ea00df7dd56ed.pdf)
+(This paper is the source of our evaluation criterion)
+
+2. Kukich, K. (1992). *Techniques for automatically correcting words in text*. Acm Computing Surveys (CSUR), 24(4), 377-439. [pdf](http://www.unige.ch/eti/ptt/docs/kukich-92.pdf)
+(This paper is the benchmark review paper)
+
+
