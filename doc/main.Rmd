@@ -249,13 +249,7 @@ if(unique_in_train){
 ```
 
 ### Step 3.2.2 - Cross validation
-Here we perform a 5-fold cross validation for the svm model using F1 score for error. The F1 score is the harmonic mean of precison and recall. We compute the error precision and recall because the errors are what matter most here - we need to correct them.
-
-\begin{align*}
-\mbox{error precision}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of real errors}}\\
-\mbox{error recall}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of tokens classified as errors}}
-\mbox{error F1 score}&=\frac{\mbox{2 x error precison x error recall}}{\mbox{error precison + error recall}}
-\end{align*}
+Here we perform a 5-fold cross validation for the svm model using detection recall for error. 
 
 The tuning parameter is the bandwidth for the Gaussian kernel(as stated in the paper), sigma.
 ```{r cross validation}
