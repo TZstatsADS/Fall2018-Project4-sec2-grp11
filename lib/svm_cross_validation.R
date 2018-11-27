@@ -3,7 +3,7 @@ cv.function <- function(X.train, y.train, par, K){
   n.fold <- floor(n_tokens/K)
   set.seed(1)
   s <- sample(rep(1:K, c(rep(n.fold, K-1), n_tokens-(K-1)*n.fold)))  
-  cv.f1 <- rep(NA, K)
+  cv.recall <- rep(NA, K)
   
   for (k in 1:K){
     train.data <- X.train[s != k, ]
@@ -13,16 +13,11 @@ cv.function <- function(X.train, y.train, par, K){
     
     fit <- ksvm(train.data, train.label, kernel = "rbfdot", type = "C-svc", kpar = list(sigma = par$sigma))
     pred <- predict(fit, test.data)
-    # print(pred)
     pred <- ifelse(pred==2,TRUE,FALSE)
-    p <- sum(!pred & !test.label)/sum(!pred)
-    r <- sum(!pred & !test.label)/sum(!test.label)
-    print(p)
-    cv.f1[k] <- 2*p*r/(p+r)  
+    cv.recall[k] <- sum(!pred & !test.label)/sum(!test.label) 
     
   }
-  print(cv.f1)
-  return(mean(cv.f1))
+  return(mean(cv.recall))
 }
 
 perform_cv <- function(input, labels){
