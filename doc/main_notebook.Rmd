@@ -586,17 +586,20 @@ As expected, the ratio calculated based on the actual errors is relative higher 
 Next, we want to know the proportion of errors that have at least one plausible correction candidates. As the algorithm only considers candidates that differ from the input error by a single insertion, deletion, substitution or reversal, it would not be able to propose candidates for complex errors like "exhlblt", "13mm:", etc.
 
 ```{r}
+candid_ind <- unlist(candidate_num_list)[!unlist(preds_list)]
+candid_ind <- candid_ind > 0
+
 candidate_table <- data.frame("Detected_errors" = rep(NA,3),
                               "Actual_errors" = rep(NA,3))
 row.names(candidate_table) <- c("wrong","no_candidate","right")
 candidate_table["no_candidate","Detected_errors"] <- sum(unlist(candidate_num_list)==0, na.rm = T)
 candidate_table["no_candidate","Actual_errors"] <- sum((unlist(candidate_num_list)[act_ind])==0, na.rm = T)
-candidate_table["right","Detected_errors"] <- total_corrected
-candidate_table["right","Actual_errors"] <- total_act_corrected
+candidate_table["right","Detected_errors"] <- sum(unlist(test_right_ind_list)[candid_ind])
+candidate_table["right","Actual_errors"] <- sum(unlist(test_right_ind_list)[candid_ind & act_ind])
 candidate_table["wrong","Detected_errors"] <- 
-  detected_denom - total_corrected - candidate_table["no_candidate","Detected_errors"]
+  detected_denom - candidate_table["right","Detected_errors"] - candidate_table["no_candidate","Detected_errors"]
 candidate_table["wrong","Actual_errors"] <- 
-  act_denom - total_act_corrected - candidate_table["no_candidate","Actual_errors"]
+  act_denom - candidate_table["right","Actual_errors"] - candidate_table["no_candidate","Actual_errors"]
 candidate_table
 ```
 
@@ -684,7 +687,7 @@ char_recall_post <- paste(round(100*char_numerator_post/char_recall_denom_post,4
 char_prec_post <- paste(round(100*char_numerator_post/char_prec_denom_post,4), "%", sep  = "")
 ```
 
-- Word level: The precision and recall of the original Tessearct OCR outputs are 61.3311% and 62.1071%. With post-processing, both precision and recall increased by around 10%. Adopting the idea of SVM garbage detection and probability scoring with contextual constraints can actually improve the Tessearct OCR output in terms of correcting words.
+- Word level: The precision and recall of the original Tessearct OCR outputs are 61.3311% and 62.1071%. With post-processing, both precision and recall increased by around 10%. Adopting the idea of SVM garbage detection and probability scoring with contextual constraints can actually improve the Tesseract OCR output in terms of correcting words.
 
 - Character level: All lowercase and uppercase letters are considered. The original Tessearct OCR outputs has precision 89.8146% and recall 88.8868%. After post-processing, the results are quite similar to the original ones, with the precision score decreasing around 0.2% and the recall decreasing around 1.1%.
 
@@ -704,7 +707,7 @@ OCR_performance_table["character_wise_precision","Tesseract_with_postprocessing"
 OCR_performance_table
 ```
 
-Digging into the slight drop of character-level precision and recall, we also create a plot showing the ratio of letter frequencies in the original tesseract to those in the ground truth.
+Digging into the slight drop of character-level precision and recall, we also create a plot showing the ratio of letter frequencies in the original tesseract to those in the ground truth. We expect the ratios to converge to 1 after post-processing. For example, the most severely repeated lower-case letter l has its ratio reduced from 2 to 1.6. However, there are also many cases where the post processed tesseract is even worse. For example, the ratio for capital V deviates more from 1. And capital letter N is overcorrected. These put together might explain why the character wise accuracies become lower.
 
 ```{r}
 # letter distribution plot
