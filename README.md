@@ -18,7 +18,7 @@ Term: Fall 2018
 **Contribution statement**:
 
 + Major contributors: Dong, Xiaojing and Xie, Huiming. 
-	+ Xiaojing and Huiming together completed the SVM model for error detection (including feature extraction and model fitting), developed the probability scoring for error correction, and generated the main reports. Xiaojing carried out the computation of prior, channel and context probabilities, and developed the evaluation measures in the correction part. Huiming carried out the preparation of data set, developed the evaluation measures for detection and overall procedure, and prepared the presentation.
+	+ Xiaojing and Huiming together completed the SVM model for error detection (including feature extraction and model fitting), developed the probability scoring for error correction, and generated the main reports. Xiaojing carried out the computation of prior, channel and context probabilities, and developed the evaluation measures in the correction part. Huiming carried out the preparation of data set, constructed the deletion and reversion table, developed the evaluation measures for detection and overall procedure, and prepared the presentation.
 
 Following [suggestions](http://nicercode.github.io/blog/2013-04-05-projects/) by [RICH FITZJOHN](http://nicercode.github.io/about/#Team) (@richfitz). This folder is orgarnized as follows.
 
