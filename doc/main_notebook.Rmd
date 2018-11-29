@@ -53,7 +53,7 @@ We have processed raw scanned images through the first two steps are relying on 
 
 # Step 1 - Load library and source code
 ```{r load lib, warning=FALSE, message = FALSE}
-packages.used <- c("devtools","vwr","kernlab", "rlist", "utils")
+packages.used <- c("devtools","vwr","kernlab", "rlist", "utils", "ggplot2")
 # check packages that need to be installed.
 packages.needed <- setdiff(packages.used, intersect(installed.packages()[,1], packages.used))
 # install additional packages
@@ -66,15 +66,17 @@ library(vwr)
 library(kernlab)
 library(rlist)
 library(utils)
+library(ggplot2)
 pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
 
 source('../lib/document_match.R')
 source('../lib/match_correction.R')
 source('../lib/features.R')
 source('../lib/svm_cross_validation.R')
-source('../lib/test_result.R')
+source('../lib/prob_score.R')
 source('../lib/perform_correction.R')
 source('../lib/rebuild_lines.R')
+source('../lib/count_char.R')
 file_name_vec <- list.files("../data/ground_truth") #100 files in total
 ```
 
@@ -191,7 +193,9 @@ We don't use the ground truth as non-error for two reasons:
 
 The computational costs of training the svm model for all tokens in the corpus will increase exponentially. One way to reduce the training time is using each token only once. However, this approach would cause a problem that the frequencies of tokens in each class is not considered, e.g. token "a" appears 3354 times in the correct tokens class. Because we need to retrain svm several times for experiment, we will use every token only once for time-saving purpose.
 
-- Potential improvement: include this frequency information as another feature.
+- Potential improvement: include this frequency information.
+
+The SVM model has 22 features, including the "Levenshtein distance" feature.
 
 ```{r training data preparation, warning=FALSE, message = FALSE}
 unique_in_train <- TRUE
@@ -209,15 +213,15 @@ train_truth_unique <- unique(train_truth)
 train_truth_bigrams <- tolower(unlist(lapply(train_truth, bigram_from_token)))
 train_freq_bigrams <- table(train_truth_bigrams)
 train_tokens_unique <- unique(c(train_error, train_nonerror))
-# load("../output/feature_train.RData")
+
 time_extract_train <- system.time(
   train_input_unique <- matrix(sapply(train_tokens_unique, extract_feature, train_freq_bigrams, 
                                       train_truth_unique), 
                                byrow = TRUE, nrow = length(train_tokens_unique)))
 rownames(train_input_unique) <- train_tokens_unique
 
-# to improve recall, tokens appearing in both classes are treated as error
-train_labels_unique <- !(train_tokens_unique %in% train_error)
+# tokens appearing in both classes are treated as non-error
+train_labels_unique <- train_tokens_unique %in% train_nonerror
 names(train_labels_unique) <- train_tokens_unique
 
 # construct final training data
@@ -241,9 +245,6 @@ save(train_input_unique, train_labels_unique, time_extract_train, file="../outpu
 cat("Time for feature extraction =", time_extract_train[3], "s")
 ```
 
-
-If a token appears at least once in both classes, it will be classified as an error to improve recall. Since for a certain token, whichever class it's in, its features are exactly the same. A bias toward the ground truth set is more severe than a bias toward the error set, because an undetected error will not get into the correction phase.
-
 ```{r number of all tokens VS number of unique tokens}
 cat(" number of all tokens in the training set:", length(train_tokens), "\n",
     "number of unique tokens in the training set:", length(train_tokens_unique), "\n",
@@ -252,7 +253,7 @@ cat(" number of all tokens in the training set:", length(train_tokens), "\n",
 
 ### Step 3.2.2 - Cross validation
 
-Here we perform a 5-fold cross validation for the svm model using recall as evaluation metric. The tuning parameter is the bandwidth for the Gaussian kernel (as stated in the paper), sigma.
+Considering that an undetected error will not get into the correction phase, we evaluate error detection as a recall oriented task, which focus more on finding all possible errors. Here we perform a 5-fold cross validation for the svm model using recall as evaluation metric. The tuning parameter is the bandwidth for the Gaussian kernel (as stated in the paper), sigma.
 
 ```{r cross validation}
 set.seed(1)
@@ -265,12 +266,15 @@ save(cv, file="../output/cv_result.RData")
 
 ### Step 3.2.3 - Train SVM model
 
+According to the results of cross-validation, the best sigma is 0.1. Now we can train the SVM model based on 80 training files.
+
 ```{r model fitting}
 set.seed(1)
 load("../output/cv_result.RData")
 cv_result <- cv$cv_result
 best_sigma <- cv$best_sigma
 
+# train the svm model
 time_trainsvm <- (system.time(
   fit_svm <- ksvm(train_input, as.factor(train_labels), type = "C-svc", kernel = "rbfdot", 
                   kpar = list(sigma = best_sigma))))
@@ -292,94 +296,445 @@ test_file_id <- c(1:2, 11:16, 39, 42:46, 69:74)
 preds_list <- list()
 # lists of test tokens
 test_tokens_list <- tesseract_list[test_file_id]
+test_tokens_unique <- unique(unlist(test_tokens_list))
 # labels are logical TRUE/FALSE
 test_labels_list <- clean_ind_list[test_file_id]
 
 # make a list of matrices for the input features instead of collapsing them into one matrix 
 # for future document match on the corrected errors
 time_extract_test <- system.time(
-  test_input_list <- lapply(test_tokens_list, token_to_input_format, train_freq_bigrams, train_truth))
-# perform prediction of the svm model on the test set
+  test_input_unique <- matrix(sapply(test_tokens_unique, extract_feature, train_freq_bigrams, 
+                                     train_truth_unique), 
+                              byrow = TRUE, nrow = length(test_tokens_unique)))
+rownames(test_input_unique) <- test_tokens_unique
+test_input_list <- lapply(test_tokens_list, function(x){ test_input_unique[x,] })
+# perform prediction on the test set
 time_predict <- system.time(
   for(i in 1:length(test_input_list)){
     preds_list[[i]] <- as.logical(predict(fit_svm, test_input_list[[i]]))
   }
 )
+
+save(test_input_list, preds_list, time_extract_test, time_predict, file="../output/predict_svm.RData")
+```
+
+```{r}
+cat(" Number of Tokens in the testing set = ", length(unlist(test_tokens_list)), "\n",
+    "Time for testing feature extraction =", time_extract_test[3], "s \n",
+    "Time for prediction =", time_predict[3], "s")
+```
+
+# Step 4 - Error correction
+
+Given the detected word error, in order to find the best correction, we need to generate the candidate corrections: a dictionary or a database of legal n-grams to locate one or more potential correction terms. Then we need invoke some lexical-similarity measure between the misspelled string and the candidates or a probabilistic estimate of the likelihood of the correction to rank order the candidates.
+
+The referenced paper is: 
+[probability scoring with contextual constraints](https://link.springer.com/content/pdf/10.1007%2FBF01889984.pdf)
+
+## Step 4.1 - Correction data preparation
+
+We first construct a collection of candidates that including corrections that differ from the input error by a single insertion, deletion, substitution or reversal. Levenshtein-Damerau distance is used here to find the plausible corrections, which computes the minimal number of insertions, deletions, substitutions or reversals required to transform one string into the other.
+
+```{r proposing candidate}
+# create a dictionary containing all legal words
+dict_candidates <- unique(tolower(c(english.words, train_truth_unique)))
+
+# example "acress" as illustrated in the paper
+acress_candidate <- propose_candidate("acress")
+cat("Example of candidate corrections: \"acress\" \n", acress_candidate)
+```
+
+## Step 4.2 - Probability scoring
+
+The probability scoring $Pr(c) Pr(t|c) Pr(l|c) Pr(r|c)$ utilizes three types of information sources: 
+
+* Prior probability $Pr(c)$:
+
+    + Sparse data problems: a proposed correction might not have appeared in the training set.
+    + Measure: ELE estimation method $Pr(c)=(freq(c) + 0.5)/(N + V/2)$ assigns non-zero probabilities in the case of zero frequency, where 
+    
+        a. $freq(c)$ is the frequency of the proposed correction c in the training corpus
+        b. N is the total number of words
+        c. V is the vocabulary size
+
+Example of prior probabilities for "acress" candidates:
+
+```{r prior example}
+priors <- calculate_prior(train_truth, dict_candidates)
+
+# example "acress" as illustrated in the paper
+list.cbind(priors[acress_candidate])
 ```
 
 
+* Channel probability $Pr(t|c)$:
 
+    + Computed from four confusion matrices (Church and Gale, 1991)
+        a. del[x, y]: the number of times that the characters 'xy' (in the correct word) were typed as 'x'
+        b. add[x, y]: the number of times that 'x' was typed as 'xy'
+        c. sub[x, y]: the number of times that 'y' was typed as 'x'
+        d. rev[x, y]: the number of times that 'xy' was typed as 'yx'
+        e. chars[x, y] and chars[x]: the number of occurence of 'xy' and 'x'
+        
+        \begin{equation}
+        Pr(t|c) =
+        \begin{cases}
+        del[c_{p_1}, c_p]/chars[c_{p-1}, c_p] & \text{if deletion}\\
+        add[c_{p_1}, t_p]/chars[c_{p-1}] & \text{if insertion}\\
+        sub[t_p, c_p]/chars[c_p] & \text{if substitution}\\
+        rev[c_p, c_{p+1}]/chars[c_p, c_{p+1}] & \text{if reversal}
+        \end{cases}       
+        \end{equation}
+
+    + Good-Turing estimation method: $r^* = (r + 1)N_{r+1}/N_r$, which also gives non-zero probabilities in the case of zero frequency.
+
+Example of channel probabilities for "acress" candidates:
+
+```{r channel}
+# apply Good-Turing estimation on confusion matrices
+del <- read.csv('../data/confusion_matrix/del_matrix.csv')
+add <- read.csv('../data/confusion_matrix/add_matrix.csv')
+sub <- read.csv('../data/confusion_matrix/sub_matrix.csv')
+rev <- read.csv('../data/confusion_matrix/rev_matrix.csv')
+adj_del <- gt_confusion(del)
+adj_add <- gt_confusion(add)
+adj_sub <- gt_confusion(sub)
+adj_rev <- gt_confusion(rev)
+
+# obtain chars in the formula
+chars <- calculate_chars(train_freq_bigrams, train_truth)
+chars_bi <- chars$chars_bi
+chars_uni <- chars$chars_uni
+
+# example "acress" as illustrated in the paper
+sort(sapply(acress_candidate, calculate_channel, "acress"))
+```
+
+
+* Context information, the left context $Pr(l|c)$ and the right context $Pr(r|c)$:
+
+    + N-gram model of context: l is the word to the left of the typo, and r is the word to the right
+    
+    + Good-Turing estimation method: $r^* = (r + 1)N_{r+1}/N_r$, which provides a significant improvement over ignoring the context in the Church and Gale's study.
+
+```{r context}
+# extract word bigrams from the training set
+train_truth_l <- tolower(train_truth)
+context_bigrams_df <- cbind(train_truth_l[1:length(train_truth_l)-1],
+                            train_truth_l[2:length(train_truth_l)])
+# calculate bigram frequencies
+context_orig <- split(context_bigrams_df[,2], context_bigrams_df[,1])
+context_names <- lapply(context_orig, unique)
+context_freq <- lapply(context_orig, table)
+freq_table <- table(unlist(context_freq))
+# apply Good-Turing estimation 
+adj_context <- lapply(context_freq, function(x) { sapply(x, gt_estimation, freq_table) })
+```
+
+## Step 4.3 - Application on testing data
+
+Now, we can perform error correction on the detected errors from Step 3.3.
+
+```{r detected error correction}
+# data preparation
+test_tokens_list_vec <- tesseract_list_vec[test_file_id]
+test_tokens_per_line_list <- tokens_per_line_list[test_file_id]
+
+# find left and right tokens
+left_list <- lapply(test_tokens_list, function(x) { c(NA, x[1:(length(x)-1)]) })
+right_list <- lapply(test_tokens_list, function(x) { c(x[2:length(x)], NA) })
+
+# perform correction
+corrected_list <- list()
+time_correct <- system.time(
+  for(i in 1:20) {
+    cur_token <- test_tokens_list[[i]]; cur_left <- left_list[[i]]; cur_right <- right_list[[i]]
+    pred_ind <- preds_list[[i]]
+    l <- length(cur_token)
+    corrected_list[[i]] <- lapply(1:l, function(x){
+      do_correction_all(cur_token[x], cur_left[x], cur_right[x], pred_ind[x])
+    })
+  }
+)
+
+# save the correction results, number of candidates etc. separately for evaluation
+corrected_doc_list <- list()
+legal_list <- list()
+candidate_num_list <- list()
+score_list <- list()
+for(i in 1:20){
+  corrected_doc_list[[i]] <- unlist(lapply(corrected_list[[i]], function(x) {x$c}))
+  legal_list[[i]] <- unlist(lapply(corrected_list[[i]], function(x) {x$legal}))
+  candidate_num_list[[i]] <- unlist(lapply(corrected_list[[i]], function(x) {x$num}))
+  score_list[[i]] <- lapply(corrected_list[[i]], function(x) {x$score})
+}
+
+save(corrected_list, corrected_doc_list, time_correct, file="../output/corrected.RData")
+```
+
+```{r}
+cat("Time for performing correction =", time_correct[3], "s")
+```
+
+```{r rebuild for evaluation}
+# rebuild corrected documents line by line
+corrected_list_vec <- list()
+for(i in 1:20){
+  corrected_list_vec[[i]] <- rebuild_lines(corrected_doc_list[[i]], test_tokens_per_line_list[[i]])
+}
+
+# keep the correction results only
+# rebuild the logical indicators obtained from detection step line by line
+preds_list_vec <- list()
+for(i in 1:20){
+  preds_list_vec[[i]] <- rebuild_lines(preds_list[[i]], test_tokens_per_line_list[[i]])
+}
+# use the logical indicators to select only the correction results
+error_corrections_list_vec <- list()
+for(i in 1:20) {
+  current_file_corrections_list <- corrected_list_vec[[i]]
+  current_file_preds_list <- preds_list_vec[[i]]
+  l <- length(current_file_corrections_list)
+  error_corrections_list_vec[[i]] <- list()
+  for(j in 1:l) {
+    error_corrections_list_vec[[i]] <- list.append(
+      error_corrections_list_vec[[i]], current_file_corrections_list[[j]][!current_file_preds_list[[j]]])
+  }
+}
+```
 
 # Step 5 - Performance measure
-## Step 5.1 Evaluation on detection performance measure
 
-Considering that an undetected error will not get into the correction phase, we evaluate error detection as a recall oriented task, which focus on finding all possible errors. Below is the confusion matrix for error detection.
+## Step 5.1 - Evaluation on detection performance measure
+
+Considering that an undetected error will not get into the correction phase, we evaluate error detection as a recall oriented task, which focus more on finding all possible errors. Below is the confusion matrix for error detection. To evaluate the performance of error detection, we define
 
 \begin{align*}
-\mbox{detection recall}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of actual errors}}
+\mbox{detection recall}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of actual errors}}\\
+\mbox{detection precision}&=\frac{\mbox{number of correctly detected errors}}{\mbox{number of detected errors}}
 \end{align*}
 
 ```{r error matrix}
+# relabel the actual correctness and model selection results
 preds <- unlist(preds_list)
 test_labels <- unlist(test_labels_list)
 model_detection <- factor(ifelse(preds, "Correct","Error" ), levels = c("Error", "Correct"))
 actual_correctness <- factor(ifelse(test_labels, "Correct","Error" ), levels = c("Error", "Correct"))
+# create confusion matrix
 detection_confusion_matrix <- table(actual_correctness,model_detection)
 detection_confusion_matrix_frac <- round(detection_confusion_matrix/length(model_detection),4)
-# error_precision <-list(m[1,1]/sum(m[1,]))
+# calculate recall and precision
 detection_recall <- detection_confusion_matrix[1,1]/sum(detection_confusion_matrix[1,])
-detection_recall_display <- paste(round(100*detection_recall,2), "%", sep  = "")
-# accuracy <- list(m[1,1]+m[2,2])
-cat("Confusion Matrix for Error detection: \n")
-detection_confusion_matrix_frac
-# cat("error precision = ", error_precision[[1]], "\n")
-cat("detection recall = ", detection_recall_display, "\n")
-# cat("overall accuracy = ", accuracy[[1]], "\n")
+detection_precision <- detection_confusion_matrix[1,1]/sum(detection_confusion_matrix[,1])
+detection_recall_display <- paste(round(100*detection_recall,4), "%", sep  = "")
+detection_precision_display <- paste(round(100*detection_precision,4), "%", sep  = "")
+
+# display confusion matrix
+detection_confusion_matrix
+# display detection recall and precision 
+cat(" detection recall = ", detection_recall_display, "\n",
+    "detection precision = ", detection_precision_display, "\n")
 ```
 
 
-## Step 5.2 Evaluation on correction performance measure
-The two most common OCR accuracy measures are precision and recall. Both are relative measures of the OCR accuracy because they are computed as ratios of the correct output to the total output (precision) or input (recall). More formally defined,
+## Step 5.2 - Evaluation on correction performance measure
+
+In the correction step, we are mostly interested in the percentage of errors that could be rightly corrected.
+Moreover, since there are false negatives, that is, non-erroneous words passed from the detection step, we also looked at the the ratio in terms of the actual errors.
+
 \begin{align*}
-\mbox{precision}&=\frac{\mbox{number of correct items}}{\mbox{number of items in OCR output}}\\
-\mbox{recall}&=\frac{\mbox{number of correct items}}{\mbox{number of items in ground truth}}
+\mbox{corrected ratio}&=\frac{\mbox{number of detected errors that are rightly corrected}}{\mbox{number of detected errors}}\\
+\mbox{actual corrected ratio}&=\frac{\mbox{number of actual errors that are rightly corrected}}{\mbox{number of rightly detected errors}}
+\end{align*}
+
+The correction is considered as right if this correction appears in the same line in the ground truth file. We think the probability is considerably small for the same token appearing in the same line both as an error and as a non-erroneous word, at least smaller than that probability in the same document, so we compare each line instead of each document.
+
+```{r}
+test_ground_truth_list_vec <- ground_truth_list_vec[test_file_id]
+test_tokens_per_line_list <- tokens_per_line_list[test_file_id]
+test_corrections_list_vec <- corrections_list_vec[test_file_id]
+
+# corrected ratio
+# determine whether the correction is right through line-by-line matching
+test_right_ind_list <- list()
+for(i in 1:20){
+  test_right_ind_list[[i]] <- doc_match(error_corrections_list_vec[[i]],
+                                        test_ground_truth_list_vec[[i]])[[1]]
+}
+# the number of detected errors that are rightly corrected
+total_corrected <- sum(unlist(test_right_ind_list))
+# total number of detected errors
+detected_denom <- sum(!unlist(preds_list))
+# get the corrected ratio
+corrected_ratio_display <- paste(round(100*total_corrected/detected_denom,4), "%", sep  = "")
+
+# actual corrected ratio
+# the number of actual errors that are rightly corrected
+total_act_corrected <- sum(unlist(test_right_ind_list)[act_ind])
+act_ind <- !unlist(test_labels_list)[!unlist(preds_list)]
+# total number of rightly detected errors
+act_denom <- sum(act_ind)
+# get the actual corrected ratio
+act_ratio_display <- paste(round(100*total_act_corrected/act_denom,4), "%", sep  = "")
+
+cat(" corrected ratio = ", corrected_ratio_display, "\n",
+    "actual corrected ratio = ", act_ratio_display, "\n")
+```
+
+As expected, the ratio calculated based on the actual errors is relative higher than the overall corrected ratio, because of the existence of false negatives.
+
+Next, we want to know the proportion of errors that have at least one plausible correction candidates. As the algorithm only considers candidates that differ from the input error by a single insertion, deletion, substitution or reversal, it would not be able to propose candidates for complex errors like "exhlblt", "13mm:", etc.
+
+```{r}
+candidate_table <- data.frame("Detected_errors" = rep(NA,3),
+                              "Actual_errors" = rep(NA,3))
+row.names(candidate_table) <- c("wrong","no_candidate","right")
+candidate_table["no_candidate","Detected_errors"] <- sum(unlist(candidate_num_list)==0, na.rm = T)
+candidate_table["no_candidate","Actual_errors"] <- sum((unlist(candidate_num_list)[act_ind])==0, na.rm = T)
+candidate_table["right","Detected_errors"] <- total_corrected
+candidate_table["right","Actual_errors"] <- total_act_corrected
+candidate_table["wrong","Detected_errors"] <- 
+  detected_denom - total_corrected - candidate_table["no_candidate","Detected_errors"]
+candidate_table["wrong","Actual_errors"] <- 
+  act_denom - total_act_corrected - candidate_table["no_candidate","Actual_errors"]
+candidate_table
+```
+
+As we can see from above evaluation results, the correction algorithm can only correct around 40% of the errors and does not perform well on the OCR outputs. It was designed for correctin typos - errors from the keyboard of a typist, but not for OCR, and shows some limitations in this project:
+
+1. It only handles 1 mis-operation (insertion, deletion, substitution or reversal) in one token
+
+2. It does not consider split or merge of tokens
+
+3. It does not consider confusion between letters and other symbols (e.g. numbers)
+
+4. The confusion matrix is not calculated specifically for OCR errors (such as "I" and "l")
+
+5. Context problem: We don't know if the previous/following word belongs to another paragraph - can be misleading
+
+
+## Step 5.3 - Overall evaluation
+
+Finally, we evaluate the overall performance for error detection and correction at both word and character level, using the 20 testing files.
+
+The two most common OCR accuracy measures are precision and recall. Both are relative measures of the OCR accuracy because they are computed as ratios of the correct output to the total output (precision) or input (recall). More formally defined,
+
+\begin{align*}
+\mbox{recall}&=\frac{\mbox{number of correct items}}{\mbox{number of items in ground truth}}\\
+\mbox{precision}&=\frac{\mbox{number of correct items}}{\mbox{number of items in OCR output}}
 \end{align*}
 where *items* refer to either characters or words, and ground truth is the original text stored in the plain text file. 
 
-Both *precision* and *recall* are mathematically convenient measures because their numeric values are some decimal fractions in the range between 0.0 and 1.0, and thus can be written as percentages. For instance, recall is the percentage of words in the original text correctly found by the OCR engine, whereas precision is the percentage of correctly found words with respect to the total word count of the OCR output. Note that in the OCR-related literature, the term OCR accuracy often refers to recall.
+```{r}
+##################
+### word level ###
+##################
+# OCR outputs
+# number of non-errors
+total_original_nonerror <- length(unlist(nonerror_list[test_file_id]))
+# calculate precision and recall
+precision_denom <- length(unlist(tesseract_list[test_file_id]))
+recall_denom <- length(unlist(ground_truth_list[test_file_id]))
+wd_prec <- paste(round(100*total_original_nonerror/precision_denom,4), "%", sep  = "")
+wd_recall <- paste(round(100*total_original_nonerror/recall_denom,4), "%", sep  = "")
 
-Here, we only finished the **word level evaluation** criterions, you are required to complete the **letter-level** part.
+# with post-processing
+test_clean_ind_list <- clean_ind_list[test_file_id]
+# determine error/non-error in the final corrected output
+post_right_ind_list <- list()
+for(i in 1:20){
+  post_right_ind_list[[i]] <- doc_match(corrected_list_vec[[i]],
+                                        test_ground_truth_list_vec[[i]])[[1]]
+}
+# number of corrected items after svm detection and correction
+total_post_right <- sum(unlist(post_right_ind_list)) 
+# calculate precision and recall
+wd_prec_post <- paste(round(100*total_post_right/precision_denom,4), "%", sep  = "")
+wd_recall_post <- paste(round(100*total_post_right/recall_denom,4), "%", sep  = "")
+
+#######################
+### character level ###
+#######################
+# OCR outputs
+test_tesseract_list_vec <- tesseract_list_vec[test_file_id]
+char_numerator <- 0
+char_prec_denom <- 0
+char_recall_denom <- 0
+# count the numbers of occurence for all lowercase and uppercase letters
+for(i in 1:20){
+  char_match_results <- char_match(test_tesseract_list_vec[[i]],test_ground_truth_list_vec[[i]])
+  char_numerator <- char_numerator + char_match_results[[1]]
+  char_prec_denom <- char_prec_denom + char_match_results[[2]]
+  char_recall_denom <- char_recall_denom + char_match_results[[3]]
+}
+char_prec <- paste(round(100*char_numerator/char_prec_denom,4), "%", sep  = "")
+char_recall <- paste(round(100*char_numerator/char_recall_denom,4), "%", sep  = "")
+
+# with post-processing
+char_numerator_post <- 0
+char_prec_denom_post <- 0
+char_recall_denom_post <- 0
+for(i in 1:20){
+  char_match_results <- char_match(corrected_list_vec[[i]],test_ground_truth_list_vec[[i]])
+  char_numerator_post <- char_numerator_post + char_match_results[[1]]
+  char_prec_denom_post <- char_prec_denom_post + char_match_results[[2]]
+  char_recall_denom_post <- char_recall_denom_post + char_match_results[[3]]
+}
+char_recall_post <- paste(round(100*char_numerator_post/char_recall_denom_post,4), "%", sep  = "")
+char_prec_post <- paste(round(100*char_numerator_post/char_prec_denom_post,4), "%", sep  = "")
+```
+
+- Word level: The precision and recall of the original Tessearct OCR outputs are 61.3311% and 62.1071%. With post-processing, both precision and recall increased by around 10%. Adopting the idea of SVM garbage detection and probability scoring with contextual constraints can actually improve the Tessearct OCR output in terms of correcting words.
+
+- Character level: All lowercase and uppercase letters are considered. The original Tessearct OCR outputs has precision 89.8146% and recall 88.8868%. After post-processing, the results are quite similar to the original ones, with the precision score decreasing around 0.2% and the recall decreasing around 1.1%.
 
 ```{r}
-ground_truth_vec <- str_split(paste(current_ground_truth_txt, collapse = " ")," ")[[1]] #1078
-old_intersect_vec <- vecsets::vintersect(tolower(ground_truth_vec), tolower(tesseract_vec)) #607
-new_intersect_vec <- vecsets::vintersect(tolower(ground_truth_vec), tolower(tesseract_delete_error_vec)) #600
-
 OCR_performance_table <- data.frame("Tesseract" = rep(NA,4),
                                     "Tesseract_with_postprocessing" = rep(NA,4))
 row.names(OCR_performance_table) <- c("word_wise_recall","word_wise_precision",
                                       "character_wise_recall","character_wise_precision")
-OCR_performance_table["word_wise_recall","Tesseract"] <- length(old_intersect_vec)/length(ground_truth_vec)
-OCR_performance_table["word_wise_precision","Tesseract"] <- length(old_intersect_vec)/length(tesseract_vec)
-OCR_performance_table["word_wise_recall","Tesseract_with_postprocessing"] <- length(new_intersect_vec)/length(ground_truth_vec)
-OCR_performance_table["word_wise_precision","Tesseract_with_postprocessing"] <- length(new_intersect_vec)/length(tesseract_delete_error_vec)
-kable(OCR_performance_table, caption="Summary of OCR performance")
+OCR_performance_table["word_wise_recall","Tesseract"] <- wd_recall
+OCR_performance_table["word_wise_precision","Tesseract"] <- wd_prec
+OCR_performance_table["word_wise_recall","Tesseract_with_postprocessing"] <- wd_recall_post
+OCR_performance_table["word_wise_precision","Tesseract_with_postprocessing"] <- wd_prec_post
+OCR_performance_table["character_wise_recall","Tesseract"] <- char_recall
+OCR_performance_table["character_wise_precision","Tesseract"] <- char_prec
+OCR_performance_table["character_wise_recall","Tesseract_with_postprocessing"] <- char_recall_post
+OCR_performance_table["character_wise_precision","Tesseract_with_postprocessing"] <- char_prec_post
+OCR_performance_table
 ```
 
-<!-- letter/number/space distribution comparison -->
-Besides the above required measurement, you are encouraged the explore more evaluation measurements. Here are some related references:
+Digging into the slight drop of character-level precision and recall, we also create a plot showing the ratio of letter frequencies in the original tesseract to those in the ground truth.
 
-1. Karpinski, R., Lohani, D., & Belaïd, A. *Metrics for Complete Evaluation of OCR Performance*. [pdf](https://csce.ucmss.com/cr/books/2018/LFS/CSREA2018/IPC3481.pdf)
+```{r}
+# letter distribution plot
+# OCR outputs
+test_ground_truth_char_table <- count_char(unlist(test_ground_truth_list_vec))
+test_tesseract_char_table <- count_char(unlist(test_tesseract_list_vec))
+old_char_ratio <- test_tesseract_char_table/test_ground_truth_char_table
+old_char_ratio_sorted <- sort(old_char_ratio, decreasing = TRUE)
 
-- section 2.1 Text-to-Text evaluation
+old_char_ratio_sorted_df <- as.data.frame(old_char_ratio_sorted)
+names(old_char_ratio_sorted_df) <-"ratio"
+old_char_ratio_sorted_df$character <- factor(rownames(old_char_ratio_sorted_df), levels = names(old_char_ratio_sorted))
+old_char_ratio_sorted_df$group <- factor("tesseract")
+# with post-processing
+test_corrected_char_table <- count_char(unlist(corrected_list_vec))
+post_char_ratio <- test_corrected_char_table/test_ground_truth_char_table
+post_char_ratio_sorted <- sort(post_char_ratio, decreasing = TRUE)
 
-2. Mei, J., Islam, A., Wu, Y., Moh'd, A., & Milios, E. E. (2016). *Statistical learning for OCR text correction*. arXiv preprint arXiv:1611.06950. [pdf](https://arxiv.org/pdf/1611.06950.pdf)
+post_char_ratio_sorted_df <- as.data.frame(post_char_ratio_sorted)
+names(post_char_ratio_sorted_df) <-"ratio"
+post_char_ratio_sorted_df$character <- factor(rownames(post_char_ratio_sorted_df), levels = names(old_char_ratio_sorted))
+post_char_ratio_sorted_df$group <- factor("post-processed tesseract")
 
-- section 5, separate the error detection and correction criterions
+plot_df <- rbind(old_char_ratio_sorted_df, post_char_ratio_sorted_df)
+ggplot(data = plot_df) +
+  geom_bar(stat = "identity", position = "dodge", aes(x=character,y = ratio, fill = group)) +
+  ggtitle("Letter frequency: ratio of tesseract to ground truth") + 
+  geom_hline(yintercept=1, color = "black")
+```
 
-3. Belaid, A., & Pierron, L. (2001, December). *Generic approach for OCR performance evaluation*. In Document Recognition and Retrieval IX (Vol. 4670, pp. 203-216). International Society for Optics and Photonics. [pdf](https://members.loria.fr/ABelaid/publis/spie02-belaid-pierron.pdf)
-
-- section 3.2, consider the text alignment
 
 # References {-}
 

@@ -38,12 +38,12 @@ char_match <- function(tesseract_doc, truth_doc){
       current_tesseract_line_nchar <- nchar(current_tesseract_line)
       current_truth_line <- paste(truth_doc[[i]], collapse = " ")
       current_truth_line_nchar <- nchar(current_truth_line)
-      current_line_nchar_error <- levenshtein.distance(current_tesseract_line, current_truth_line)
+      current_line_nchar_error <- levenshtein.damerau.distance(current_tesseract_line, current_truth_line)
       crct_nchar <- crct_nchar + (current_tesseract_line_nchar - current_line_nchar_error)
     }
   }
   else{
-    doc_nchar_error <- levenshtein.distance(tesseract_one_vec, truth_one_vec)
+    doc_nchar_error <- levenshtein.damerau.distance(tesseract_one_vec, truth_one_vec)
     crct_nchar <- tesseract_nchar - doc_nchar_error
   }
   names(crct_nchar) <- NULL
